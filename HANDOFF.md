@@ -1,46 +1,48 @@
 # PaperVault Development Handoff
 
-Updated: 2026-08-08 (Asia/Shanghai)
+Updated: 2026-08-10 (Asia/Shanghai)
 
 ## 1. Start Here
 
 Project root:
 
 ```text
-C:\Users\skywu\Documents\Codex\2026-08-07\f-d-s-f\outputs\paper-vault
+C:\Users\skywu\Documents\Codex\PaperVault
 ```
 
-Local URL:
+Windows desktop development startup:
 
-```text
-http://127.0.0.1:8765
+```powershell
+.\start-desktop.ps1
 ```
 
-Current health response:
+Desktop health response:
 
 ```json
-{"status":"ok","version":"1.8.0"}
+{"status":"ok","version":"1.9.0"}
 ```
 
-Preferred startup on Windows:
+The desktop shell chooses an ephemeral localhost port. The legacy browser mode
+is still available at `http://127.0.0.1:8765` through:
 
 ```powershell
 .\start.ps1
 ```
 
-Or double-click `start.bat`. Manual startup:
+The Windows desktop package is built with:
 
 ```powershell
-.\.venv\Scripts\python.exe -m backend.app
+.\build-windows.ps1
 ```
 
-The service is currently running. Before starting another instance, check whether port `8765` is already listening.
+The verified portable executable is `dist\PaperVault\PaperVault.exe`. No
+PaperVault service is intentionally left running after the final QA pass.
 
 ## 2. Product Scope
 
-PaperVault is a Windows-local paper knowledge base with a browser UI. It stores all PDFs, metadata, bilingual summaries, tags, ratings, vocabulary, extracted figures, and PDF annotations locally.
+PaperVault is a local paper knowledge base with a native Windows desktop shell and a retained browser UI. It stores all PDFs, metadata, bilingual summaries, tags, ratings, vocabulary, extracted figures, and PDF annotations locally.
 
-The longer-term direction is a Windows desktop client. The current frontend/backend separation and localhost HTTP API are intentionally compatible with a future WebView2, Tauri, or packaged Python desktop shell.
+The Windows client uses pywebview with the system WebView2 runtime. The platform boundary already defines macOS WKWebView data and icon contracts so a future macOS bundle can reuse the same frontend, backend, and `/api/*` surface.
 
 ## 3. Technology
 
@@ -52,8 +54,10 @@ The longer-term direction is a Windows desktop client. The current frontend/back
 - Offline English-to-Chinese lookup: CTranslate2/Argos-compatible local model plus an academic glossary.
 - Pronunciation: `cmudict` with local fallback logic.
 - LLM: configurable OpenAI-compatible chat-completions adapter.
+- Desktop: pywebview 6.x, WebView2 on Windows, and a PyInstaller one-directory package.
 
 Dependencies are pinned by range in `requirements.txt`.
+Desktop and packaging dependencies are in `requirements-desktop.txt`.
 
 ## 4. Data and Secrets
 
@@ -66,6 +70,16 @@ data/
   assets/              Extracted paper page/figure images
   models/              Offline translation models
 ```
+
+The packaged Windows desktop app defaults to `%LOCALAPPDATA%\PaperVault`.
+`PAPER_VAULT_DATA_DIR` and `--data-dir` provide an explicit cross-platform
+override. The original four-paper library remains untouched at:
+
+```text
+C:\Users\skywu\Documents\Codex\2026-08-07\f-d-s-f\outputs\paper-vault\data
+```
+
+Do not silently copy, migrate, reset, or open that real library during tests.
 
 The API key source file exists at:
 
@@ -174,6 +188,17 @@ The zero counts are real data, not a counting error. Zero-count tags are disable
 - Batch delete papers, PDFs, extracted assets, and annotations.
 - Batch export Markdown summaries or JSON metadata.
 
+### Native Windows desktop
+
+- Native resizable window backed by the installed Microsoft Edge WebView2 Runtime.
+- Desktop-owned localhost backend on an ephemeral port with clean shutdown.
+- Native file chooser, working Markdown/JSON downloads, and external-link handling.
+- Windows application icon and version metadata.
+- Default app data under `%LOCALAPPDATA%\PaperVault`, separate from installation files.
+- `PAPER_VAULT_DATA_DIR` and `--data-dir` override contract for migration and QA.
+- macOS platform contract for WKWebView, Application Support data, and `.icns` icon.
+- Windows `onedir` and optional `onefile` PyInstaller build modes.
+
 ## 7. Important Files
 
 ```text
@@ -215,6 +240,21 @@ tests/test_api.py
 tests/test_llm.py
   Summary parsing, glossary/IPA behavior, DeepSeek provider controls,
   alignment preservation, and publication-year inference.
+
+desktop/app.py
+  Native window, desktop bridge, and localhost backend lifecycle.
+
+desktop/platforms.py
+  Windows/macOS/Linux data, renderer, storage, resource, and icon contracts.
+
+tests/test_desktop.py
+  Desktop paths, macOS compatibility contract, bridge, version, and server lifecycle.
+
+build-windows.ps1
+  Reproducible PyInstaller packaging for the Windows desktop bundle.
+
+docs/DESKTOP.md
+  Desktop development, packaging, data-directory, and platform documentation.
 ```
 
 ## 8. Main API Surface
@@ -268,9 +308,11 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-13 tests passed
+21 tests passed
 JavaScript syntax check passed
-Desktop browser interaction and screenshot QA passed
+Windows PyInstaller `onedir` build passed
+Packaged EXE health check returned version 1.9.0
+Desktop browser interaction and 1024x700 screenshot QA passed
 No browser console warnings or errors in the final check
 ```
 
@@ -281,6 +323,8 @@ The API tests use a temporary data directory and do not alter the real library.
 - The backend only binds to `127.0.0.1` by default.
 - The service must be restarted after Python changes. HTML/CSS/JS changes require a page reload.
 - Prefer `start.ps1` or `start.bat`; they use the project `.venv`.
+- Prefer `start-desktop.ps1` for native Windows development and `build-windows.ps1` for packaging.
+- The Windows desktop app requires the Microsoft Edge WebView2 Runtime.
 - System Python may not contain `pypdf`, so tests should always use `.\.venv\Scripts\python.exe`.
 - `PaperVaultHandler.log_message` guards against `sys.stdout is None`, allowing a future/no-console Windows process to serve requests correctly.
 - Large LLM requests depend on VPN/network/API balance. Friendly errors distinguish invalid key, insufficient balance, timeout, and unreachable model service.
@@ -290,7 +334,7 @@ The API tests use a temporary data directory and do not alter the real library.
 
 These are not regressions, but they are the most useful next development areas:
 
-1. Package the app as a Windows desktop client using WebView2/Tauri or a Python desktop wrapper, while continuing to reuse the current local HTTP API and data directory.
+1. Add a signed Windows installer, code signing, and an update delivery strategy around the verified portable desktop bundle.
 2. Move long-running LLM summaries into a persistent backend job queue so work survives a browser refresh or desktop-client restart.
 3. Optimize large libraries: the list API currently includes complete summary pairs, which will become unnecessarily heavy with hundreds of papers. Add lightweight list projections and pagination/virtualization.
 4. Add automated frontend interaction tests for tag toggle, select-all, batch dialogs, sentence linkage, and numeric typography.
@@ -303,7 +347,7 @@ Use this as the first message in the next development conversation:
 
 ```text
 请先完整阅读：
-C:\Users\skywu\Documents\Codex\2026-08-07\f-d-s-f\outputs\paper-vault\HANDOFF.md
+C:\Users\skywu\Documents\Codex\PaperVault\HANDOFF.md
 
-继续开发 PaperVault。先检查 http://127.0.0.1:8765/api/health、当前服务进程和工作区代码，不要重置或覆盖 data 目录，也不要输出 API Key。沿用现有前后端结构、UI 风格和测试方式，然后处理我接下来提出的需求。
+继续开发 PaperVault 1.9.0。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出 API Key。沿用现有 `/api/*`、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
 ```

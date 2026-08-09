@@ -1,0 +1,29 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 9, 0, 0),
+    prodvers=(1, 9, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        u'040904B0',
+        [
+          StringStruct(u'CompanyName', u'Rasin-wu'),
+          StringStruct(u'FileDescription', u'PaperVault desktop application'),
+          StringStruct(u'FileVersion', u'1.9.0'),
+          StringStruct(u'InternalName', u'PaperVault'),
+          StringStruct(u'OriginalFilename', u'PaperVault.exe'),
+          StringStruct(u'ProductName', u'PaperVault'),
+          StringStruct(u'ProductVersion', u'1.9.0')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)

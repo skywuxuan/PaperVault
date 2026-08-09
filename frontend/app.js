@@ -52,6 +52,23 @@ const statusLabels = {
   error: "生成失败",
 };
 
+async function activateDesktopRuntime() {
+  if (!window.pywebview) return;
+  document.documentElement.classList.add("desktop-runtime");
+  const badge = $("#runtimeBadge");
+  badge.textContent = "DESKTOP";
+  badge.classList.add("desktop-badge");
+  try {
+    const info = await window.pywebview.api.app_info();
+    document.documentElement.dataset.platform = info.platform || "desktop";
+    badge.title = `${info.name} ${info.version}`;
+  } catch (_) {
+    document.documentElement.dataset.platform = "desktop";
+  }
+}
+
+window.addEventListener("pywebviewready", activateDesktopRuntime);
+
 function summarySource(paper) {
   if (paper.summary_status === "generating" || paper.summary_status === "error") {
     return statusLabels[paper.summary_status];
@@ -2209,6 +2226,14 @@ function bindEvents() {
   document.addEventListener("pointerup", finishPdfPointerSelection, { passive: false });
   document.addEventListener("pointercancel", finishPdfPointerSelection, { passive: false });
   document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      if (!$("#libraryView").hidden) $("#searchInput").focus();
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+      event.preventDefault();
+      if (!$("#libraryView").hidden) $("#uploadButton").click();
+    }
     if (event.key === "Escape" && !$("#wordPopover").hidden) closeWordPopover();
     if (event.key === "Escape") {
       closePdfSelectionToolbar(true);
@@ -2226,6 +2251,7 @@ function bindEvents() {
 }
 
 async function init() {
+  if (window.pywebview) await activateDesktopRuntime();
   bindEvents();
   try {
     await Promise.all([loadTags(), loadSettings()]);

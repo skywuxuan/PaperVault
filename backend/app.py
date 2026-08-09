@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from . import __version__
 from .database import Database, utc_now
 from .llm import SummaryError, generate_summary, translate_english
 from .offline_translation import OfflineTranslationError, translate_english_offline
@@ -136,7 +137,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/api/health":
-            self.send_json({"status": "ok", "version": "1.8.0"})
+            self.send_json({"status": "ok", "version": __version__})
             return
         if path == "/api/papers":
             query = parse_qs(parsed.query)

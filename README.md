@@ -1,5 +1,23 @@
 # PaperVault
 
+## Windows 桌面版
+
+项目现在提供基于系统 WebView2 的 Windows 原生桌面入口，同时保留原有本地 Web 版本和全部 `/api/*` 接口。桌面版默认将数据库、论文和模型保存在 `%LOCALAPPDATA%\PaperVault`，不会写入安装目录。
+
+开发模式启动：
+
+```powershell
+.\start-desktop.ps1
+```
+
+构建 Windows 桌面包：
+
+```powershell
+.\build-windows.ps1
+```
+
+推荐的一目录构建输出位于 `dist\PaperVault\PaperVault.exe`。桌面架构、数据目录覆盖、Windows 打包以及为 macOS 保留的平台接口详见 [`docs/DESKTOP.md`](docs/DESKTOP.md)。
+
 PaperVault 是一个完全运行在 Windows 本机的论文管理 WebUI。后端只监听 `127.0.0.1`，PDF、摘要、标签和模型配置均保存在项目的 `data` 目录，不需要外部数据库或公网服务。
 
 ## 启动
