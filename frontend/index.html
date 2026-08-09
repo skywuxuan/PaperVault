@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6f5">
+  <title>PaperVault - 本地论文库</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="#" aria-label="返回论文库">
+      <span class="brand-mark" aria-hidden="true">PV</span>
+      <span class="brand-text">PaperVault</span>
+      <span class="local-badge">LOCAL</span>
+    </a>
+    <div class="header-actions">
+      <button class="secondary-button header-word-button" id="vocabularyButton" type="button"><span aria-hidden="true">Aa</span> 单词本</button>
+      <button class="secondary-button header-tag-button" id="manageTagsButton" type="button"><span aria-hidden="true">#</span> 标签管理</button>
+      <button class="icon-button" id="settingsButton" type="button" title="模型设置" aria-label="模型设置">&#9881;</button>
+      <button class="primary-button" id="uploadButton" type="button"><span aria-hidden="true">+</span> 导入 PDF</button>
+    </div>
+  </header>
+
+  <main id="libraryView" class="app-shell">
+    <aside class="library-sidebar" aria-label="论文筛选">
+      <div class="sidebar-heading">
+        <span>资料库</span>
+        <span id="totalCount" class="count-badge">0</span>
+      </div>
+      <button class="filter-item active" type="button" data-tag-id="">
+        <span class="filter-dot all-dot"></span>
+        <span>全部论文</span>
+        <span id="allPaperCount" class="filter-count">0</span>
+      </button>
+      <div class="sidebar-section-title">自定义标签</div>
+      <div id="tagFilters" class="tag-filters"></div>
+      <button id="sidebarManageTagsButton" class="sidebar-manage-button" type="button"><span aria-hidden="true">+</span> 管理标签</button>
+      <div class="sidebar-section-title">摘要状态</div>
+      <div id="summaryFilters" class="facet-list">
+        <button class="filter-item active" type="button" data-summary-filter="all"><span class="facet-icon">○</span><span>全部状态</span><span id="summaryAllCount" class="filter-count">0</span></button>
+        <button class="filter-item" type="button" data-summary-filter="ready"><span class="facet-icon ready">●</span><span>已有摘要</span><span id="summaryReadyCount" class="filter-count">0</span></button>
+        <button class="filter-item" type="button" data-summary-filter="error"><span class="facet-icon error">!</span><span>生成失败</span><span id="summaryErrorCount" class="filter-count">0</span></button>
+        <button class="filter-item" type="button" data-summary-filter="pending"><span class="facet-icon pending">…</span><span>待处理</span><span id="summaryPendingCount" class="filter-count">0</span></button>
+      </div>
+      <div class="sidebar-section-title">推荐度</div>
+      <div id="ratingFilters" class="facet-list">
+        <button class="filter-item active" type="button" data-rating-filter="all"><span class="facet-icon star">☆</span><span>全部推荐度</span></button>
+        <button class="filter-item" type="button" data-rating-filter="3"><span class="facet-icon star">★</span><span>三星推荐</span><span id="rating3Count" class="filter-count">0</span></button>
+        <button class="filter-item" type="button" data-rating-filter="2"><span class="facet-icon star">★</span><span>二星推荐</span><span id="rating2Count" class="filter-count">0</span></button>
+        <button class="filter-item" type="button" data-rating-filter="1"><span class="facet-icon star">★</span><span>一星推荐</span><span id="rating1Count" class="filter-count">0</span></button>
+        <button class="filter-item" type="button" data-rating-filter="0"><span class="facet-icon muted">−</span><span>未推荐</span><span id="rating0Count" class="filter-count">0</span></button>
+      </div>
+    </aside>
+
+    <section class="library-content">
+      <div class="library-toolbar">
+        <div>
+          <p class="eyebrow">RESEARCH LIBRARY</p>
+          <h1>我的论文库 <span id="libraryTotalInline" class="library-total-inline">0</span></h1>
+        </div>
+        <div class="library-tools">
+          <div class="search-field">
+            <span aria-hidden="true">&#9906;</span>
+            <input id="searchInput" type="search" aria-label="搜索论文" placeholder="搜索标题、作者、摘要或标签" autocomplete="off">
+            <button id="clearSearchButton" class="search-clear" type="button" aria-label="清空搜索" title="清空搜索">&times;</button>
+          </div>
+          <select id="librarySort" class="library-sort" aria-label="论文排序">
+            <option value="recent">最近入库</option>
+            <option value="rating">推荐度</option>
+            <option value="publication">发表时间</option>
+            <option value="title">标题</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="resultBar" class="result-bar">
+        <span id="resultText">全部论文</span>
+        <span id="activeFilterLabel"></span>
+        <button id="resetFiltersButton" class="reset-filters-button" type="button" hidden>清除筛选</button>
+      </div>
+
+      <div id="batchToolbar" class="batch-toolbar" hidden>
+        <div class="batch-selection-summary">
+          <span class="selection-mark" aria-hidden="true">✓</span>
+          <strong>已选 <span id="batchSelectedCount">0</span> 篇</strong>
+          <button id="clearSelectionButton" class="text-button" type="button">取消选择</button>
+        </div>
+        <div class="batch-actions">
+          <button id="batchSummaryButton" class="batch-action-button primary-action" type="button"><span aria-hidden="true">↻</span> 生成摘要</button>
+          <button id="batchTagsButton" class="batch-action-button" type="button"><span aria-hidden="true">#</span> 标签</button>
+          <details class="batch-menu">
+            <summary class="batch-action-button"><span aria-hidden="true">★</span> 推荐度</summary>
+            <div class="batch-menu-panel" role="menu">
+              <button type="button" data-batch-rating="3">★★★ 三星推荐</button>
+              <button type="button" data-batch-rating="2">★★ 二星推荐</button>
+              <button type="button" data-batch-rating="1">★ 一星推荐</button>
+              <button type="button" data-batch-rating="0">清除推荐度</button>
+            </div>
+          </details>
+          <details class="batch-menu">
+            <summary class="batch-action-button"><span aria-hidden="true">↓</span> 导出</summary>
+            <div class="batch-menu-panel" role="menu">
+              <button type="button" data-batch-export="markdown">Markdown 摘要</button>
+              <button type="button" data-batch-export="json">JSON 数据</button>
+            </div>
+          </details>
+          <button id="batchDeleteButton" class="batch-action-button danger-action" type="button" title="删除所选论文"><span aria-hidden="true">×</span> 删除</button>
+        </div>
+      </div>
+
+      <div id="batchProgress" class="batch-progress" hidden>
+        <div><strong id="batchProgressTitle">正在处理</strong><span id="batchProgressText"></span></div>
+        <progress id="batchProgressBar" max="1" value="0"></progress>
+      </div>
+
+      <div id="paperListHeader" class="paper-list-header">
+        <label class="paper-checkbox select-all-checkbox" title="选择当前结果"><input id="selectAllPapers" type="checkbox"><span></span></label>
+        <span>论文</span><span>入库信息</span><span aria-hidden="true"></span>
+      </div>
+
+      <div id="paperList" class="paper-list" aria-live="polite"></div>
+
+      <div id="emptyState" class="empty-state" hidden>
+        <div class="empty-symbol" aria-hidden="true">P</div>
+        <h2 id="emptyTitle">还没有论文</h2>
+        <p id="emptyText">上传第一篇 PDF，建立你的本地研究资料库。</p>
+        <button class="primary-button" id="emptyUploadButton" type="button"><span aria-hidden="true">+</span> 上传论文</button>
+      </div>
+    </section>
+  </main>
+
+  <main id="readerView" class="reader-view" hidden>
+    <div class="reader-topbar">
+      <button id="backButton" class="icon-button" type="button" title="返回论文库" aria-label="返回论文库">&#8592;</button>
+      <div class="reader-identity">
+        <h1 id="readerTitle">论文标题</h1>
+        <div id="readerMeta" class="reader-meta"></div>
+      </div>
+      <div class="reader-actions">
+        <button id="regenerateButton" class="secondary-button" type="button"><span aria-hidden="true">&#8635;</span> 生成摘要</button>
+        <button id="editPaperButton" class="secondary-button" type="button"><span aria-hidden="true">&#9998;</span> 编辑</button>
+        <a id="openPdfButton" class="icon-button" href="#" target="_blank" rel="noopener" title="新窗口打开 PDF" aria-label="新窗口打开 PDF">&#8599;</a>
+        <button id="deletePaperButton" class="icon-button danger-icon" type="button" title="删除论文" aria-label="删除论文">&#10005;</button>
+      </div>
+    </div>
+    <div id="readerGrid" class="reader-grid">
+      <section id="pdfPanel" class="reader-panel pdf-panel" data-panel="pdf">
+        <div class="panel-header">
+          <div><span class="panel-index">01</span><h2>原始论文</h2></div>
+          <div class="panel-header-actions">
+            <span id="pdfMeta" class="panel-meta"></span>
+            <button class="panel-collapse-button" type="button" data-collapse-panel="pdf" title="折叠原始论文" aria-label="折叠原始论文" aria-expanded="true">−</button>
+          </div>
+        </div>
+        <div class="pdf-frame-wrap">
+          <div class="pdf-toolbar" role="toolbar" aria-label="PDF 预览工具">
+            <button id="pdfPreviousPage" class="pdf-tool-button" type="button" title="上一页" aria-label="上一页">‹</button>
+            <label class="pdf-page-control"><input id="pdfPageInput" type="number" min="1" value="1" aria-label="PDF 页码"><span>/ <b id="pdfPageTotal">0</b></span></label>
+            <button id="pdfNextPage" class="pdf-tool-button" type="button" title="下一页" aria-label="下一页">›</button>
+            <span class="pdf-toolbar-divider"></span>
+            <button id="pdfZoomOut" class="pdf-tool-button" type="button" title="缩小" aria-label="缩小">−</button>
+            <span id="pdfZoomLabel" class="pdf-zoom-label">100%</span>
+            <button id="pdfZoomIn" class="pdf-tool-button" type="button" title="放大" aria-label="放大">+</button>
+            <button id="pdfFitWidth" class="pdf-tool-button fit-button" type="button" title="适合宽度" aria-label="适合宽度">↔</button>
+            <span class="pdf-toolbar-divider"></span>
+            <span id="pdfAnnotationCount" class="pdf-annotation-count">0 处高亮</span>
+          </div>
+          <div id="pdfViewer" class="pdf-viewer" aria-label="PDF 论文预览"></div>
+        </div>
+      </section>
+      <section id="englishPanel" class="reader-panel summary-panel" data-panel="english" aria-labelledby="englishHeading">
+        <div class="panel-header">
+          <div><span class="panel-index english-index">02</span><h2 id="englishHeading">English Summary</h2></div>
+          <div class="panel-header-actions">
+            <span id="summaryStatus" class="status-pill"></span>
+            <button class="panel-collapse-button" type="button" data-collapse-panel="english" title="折叠英文摘要" aria-label="折叠英文摘要" aria-expanded="true">−</button>
+          </div>
+        </div>
+        <div id="englishSummary" class="summary-content" lang="en"></div>
+      </section>
+      <section id="chinesePanel" class="reader-panel summary-panel chinese-panel" data-panel="chinese" aria-labelledby="chineseHeading">
+        <div class="panel-header">
+          <div><span class="panel-index chinese-index">03</span><h2 id="chineseHeading">中文摘要</h2></div>
+          <div class="summary-header-tools">
+            <span id="termLinkLabel" class="linked-label" title="单击任一侧句子可同步显示对应句"><i></i><b>句对联动</b></span>
+            <button id="downloadMarkdownButton" class="summary-download-button" type="button" title="下载 Markdown 摘要" aria-label="下载 Markdown 摘要">↓</button>
+            <button class="panel-collapse-button" type="button" data-collapse-panel="chinese" title="折叠中文摘要" aria-label="折叠中文摘要" aria-expanded="true">−</button>
+          </div>
+        </div>
+        <div id="chineseSummary" class="summary-content" lang="zh-CN"></div>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="uploadDialog" class="modal medium-modal">
+    <form id="uploadForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">BATCH IMPORT</p><h2>导入 PDF 论文</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="uploadDialog" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label id="dropZone" class="drop-zone" tabindex="0">
+          <input id="pdfInput" name="file" type="file" accept="application/pdf,.pdf" multiple required>
+          <span class="upload-symbol" aria-hidden="true">PDF</span>
+          <strong id="dropTitle">选择一个或多个 PDF</strong>
+          <span id="dropMeta">或拖放到此处，单个文件最大 100 MB</span>
+        </label>
+        <div id="uploadFileQueue" class="upload-file-queue" hidden></div>
+        <p id="batchUploadNote" class="batch-upload-note" hidden>批量导入时将自动识别每篇论文的标题、作者和年份；下方标签与摘要设置会应用到全部文件。</p>
+        <div id="singlePaperMetadata" class="form-grid two-columns">
+          <label class="field field-wide"><span>标题</span><input name="title" type="text" placeholder="自动从 PDF 识别"></label>
+          <label class="field"><span>作者</span><input name="authors" type="text" placeholder="作者，多人可用逗号分隔"></label>
+          <label class="field"><span>发表年份</span><input name="publication_year" type="number" min="1500" max="2200" placeholder="2026"></label>
+          <label class="field field-wide"><span>DOI</span><input name="doi" type="text" placeholder="10.xxxx/xxxxx"></label>
+        </div>
+        <fieldset class="tag-picker-fieldset">
+          <legend>公共标签</legend>
+          <div id="uploadTagPicker" class="tag-picker"></div>
+        </fieldset>
+        <label class="toggle-row">
+          <input name="generate_summary" type="checkbox" checked>
+          <span class="toggle-track"><i></i></span>
+          <span><strong>上传后生成双语摘要</strong><small id="uploadProviderHint">本地结构索引（非机器翻译）</small></span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" type="button" data-close-dialog="uploadDialog">取消</button>
+        <button id="uploadSubmitButton" class="primary-button" type="submit">开始导入</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="batchTagsDialog" class="modal small-modal">
+    <form id="batchTagsForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">BATCH CLASSIFY</p><h2>批量管理标签</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="batchTagsDialog" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="batch-dialog-summary">将对已选的 <strong id="batchTagsPaperCount">0</strong> 篇论文执行操作。</p>
+        <div id="batchTagMode" class="segmented-control batch-tag-mode" role="group" aria-label="标签操作">
+          <label><input type="radio" name="mode" value="add" checked><span>添加标签</span></label>
+          <label><input type="radio" name="mode" value="remove"><span>移除标签</span></label>
+        </div>
+        <fieldset class="tag-picker-fieldset">
+          <legend>选择标签</legend>
+          <div id="batchTagPicker" class="tag-picker"></div>
+        </fieldset>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" type="button" data-close-dialog="batchTagsDialog">取消</button>
+        <button class="primary-button" type="submit">应用到所选论文</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="editDialog" class="modal large-modal">
+    <form id="editForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">EDIT RECORD</p><h2>编辑论文</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="editDialog" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body edit-body">
+        <div class="form-grid two-columns">
+          <label class="field field-wide"><span>标题</span><input name="title" type="text" required></label>
+          <label class="field"><span>作者</span><input name="authors" type="text"></label>
+          <label class="field"><span>发表年份</span><input name="publication_year" type="number" min="1500" max="2200"></label>
+          <label class="field field-wide"><span>DOI</span><input name="doi" type="text"></label>
+        </div>
+        <fieldset class="tag-picker-fieldset">
+          <legend>标签</legend>
+          <div id="editTagPicker" class="tag-picker"></div>
+        </fieldset>
+        <div class="summary-editor-heading">
+          <h3>双语摘要句对</h3><span>每行对应一个联动段落</span>
+        </div>
+        <div class="summary-editor-grid">
+          <label class="field"><span>English</span><textarea name="summary_en" rows="10"></textarea></label>
+          <label class="field"><span>中文</span><textarea name="summary_zh" rows="10"></textarea></label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" type="button" data-close-dialog="editDialog">取消</button>
+        <button class="primary-button" type="submit">保存修改</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="tagsDialog" class="modal small-modal">
+    <div class="modal-header">
+      <div><p class="eyebrow">CLASSIFICATION</p><h2>标签管理</h2></div>
+      <button class="icon-button modal-close" type="button" data-close-dialog="tagsDialog" aria-label="关闭" title="关闭">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="newTagForm" class="new-tag-form">
+        <input name="color" type="color" value="#28786f" title="标签颜色" aria-label="标签颜色">
+        <input name="name" type="text" placeholder="新标签名称" maxlength="80" required>
+        <button class="primary-button compact-button" type="submit">添加</button>
+      </form>
+      <div id="tagManagerList" class="tag-manager-list"></div>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDialog" class="modal medium-modal">
+    <form id="settingsForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">LLM ADAPTER</p><h2>模型设置</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="settingsDialog" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="field"><span>摘要引擎</span>
+          <select name="provider">
+            <option value="local">本地结构索引（非翻译）</option>
+            <option value="openai_compatible">OpenAI 兼容接口</option>
+          </select>
+        </label>
+        <div id="remoteSettings" class="remote-settings">
+          <label class="field"><span>API Base URL</span><input name="base_url" type="url" placeholder="https://api.openai.com/v1"></label>
+          <div class="form-grid two-columns">
+            <label class="field"><span>模型</span><input name="model" type="text" placeholder="gpt-4.1-mini"></label>
+            <label class="field"><span>最大输入字符</span><input name="max_input_chars" type="number" min="5000" max="300000"></label>
+          </div>
+          <label class="field"><span>API Key</span><input name="api_key" type="password" autocomplete="off" placeholder="保留现有密钥"></label>
+        </div>
+        <div class="local-note"><span aria-hidden="true">&#9632;</span><p>配置和密钥仅保存在本机 SQLite 数据库中，也可通过 <code>PAPER_VAULT_API_KEY</code> 环境变量提供。</p></div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" type="button" data-close-dialog="settingsDialog">取消</button>
+        <button class="primary-button" type="submit">保存设置</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="vocabularyDialog" class="modal vocabulary-modal">
+    <div class="modal-header vocabulary-header">
+      <div><p class="eyebrow">WORD BOOK</p><h2>单词本 <span id="vocabularyTotal" class="vocabulary-total">0</span></h2></div>
+      <button class="icon-button modal-close" type="button" data-close-dialog="vocabularyDialog" aria-label="关闭" title="关闭">&times;</button>
+    </div>
+    <div class="vocabulary-toolbar">
+      <div class="vocabulary-search">
+        <span aria-hidden="true">⌕</span>
+        <input id="vocabularySearch" type="search" aria-label="搜索单词本" placeholder="搜索单词或释义" autocomplete="off">
+      </div>
+      <div id="vocabularyStatusFilter" class="segmented-control" role="group" aria-label="学习状态筛选">
+        <button class="active" type="button" data-vocabulary-status="all">全部 <span id="vocabularyAllCount">0</span></button>
+        <button type="button" data-vocabulary-status="learning">学习中 <span id="vocabularyLearningCount">0</span></button>
+        <button type="button" data-vocabulary-status="mastered">已掌握 <span id="vocabularyMasteredCount">0</span></button>
+      </div>
+      <select id="vocabularySort" class="vocabulary-sort" aria-label="单词排序">
+        <option value="recent">最近更新</option>
+        <option value="alpha">字母顺序</option>
+        <option value="oldest">最早加入</option>
+      </select>
+      <button id="newVocabularyButton" class="primary-button compact-button" type="button"><span aria-hidden="true">+</span> 新增</button>
+    </div>
+    <div id="vocabularyColumns" class="vocabulary-columns" aria-hidden="true">
+      <span>词汇 / 美式音标</span><span>中文释义</span><span>状态</span>
+    </div>
+    <div id="vocabularyList" class="vocabulary-list"></div>
+    <div id="vocabularyEmpty" class="vocabulary-empty" hidden>
+      <span aria-hidden="true">Aa</span>
+      <h3>单词本还是空的</h3>
+    </div>
+  </dialog>
+
+  <dialog id="vocabularyEditDialog" class="modal small-modal">
+    <form id="vocabularyForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">VOCABULARY ENTRY</p><h2 id="vocabularyFormTitle">编辑词条</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="vocabularyEditDialog" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <label class="field"><span>英文单词或短语</span><input name="term_en" type="text" maxlength="240" required autocomplete="off"></label>
+          <label class="field"><span>中文释义</span><input name="translation_zh" type="text" maxlength="500" required autocomplete="off"></label>
+          <label class="field"><span>美式音标</span><input name="phonetic_us" type="text" maxlength="200" autocomplete="off" placeholder="自动生成，也可手动修正"></label>
+          <label class="field"><span>学习状态</span>
+            <select name="status">
+              <option value="learning">学习中</option>
+              <option value="mastered">已掌握</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-button" type="button" data-close-dialog="vocabularyEditDialog">取消</button>
+        <button class="primary-button" type="submit">保存词条</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="modal confirm-modal">
+    <div class="modal-header">
+      <div><p class="eyebrow">CONFIRM ACTION</p><h2 id="confirmTitle">确认操作</h2></div>
+      <button class="icon-button modal-close" type="button" data-confirm-value="false" aria-label="关闭" title="关闭">&times;</button>
+    </div>
+    <div class="modal-body"><p id="confirmMessage" class="confirm-message"></p></div>
+    <div class="modal-footer">
+      <button class="secondary-button" type="button" data-confirm-value="false">取消</button>
+      <button id="confirmAccept" class="danger-button" type="button" data-confirm-value="true">确认删除</button>
+    </div>
+  </dialog>
+
+  <div id="busyOverlay" class="busy-overlay" hidden>
+    <span class="spinner"></span><strong id="busyText">正在处理...</strong>
+  </div>
+  <div id="wordPopover" class="word-popover" role="dialog" aria-label="加入单词本" hidden>
+    <button id="closeWordPopover" class="word-popover-close" type="button" aria-label="关闭" title="关闭">&times;</button>
+    <div class="word-popover-heading">
+      <span id="wordPopoverTerm" class="word-popover-term"></span>
+      <span id="wordPopoverPhonetic" class="word-popover-phonetic"></span>
+    </div>
+    <div class="word-popover-meaning">
+      <span class="word-popover-label">释义</span>
+      <span id="wordPopoverTranslation" class="word-popover-translation"></span>
+    </div>
+    <p id="wordPopoverDefinition" class="word-popover-definition"></p>
+    <div class="word-popover-footer">
+      <button id="addVocabularyButton" class="primary-button word-popover-add" type="button"><span aria-hidden="true">+</span> 加入单词本</button>
+    </div>
+  </div>
+  <div id="pdfSelectionToolbar" class="pdf-selection-toolbar" role="toolbar" aria-label="PDF 选区工具" hidden>
+    <button id="highlightSelectionButton" type="button"><span class="highlight-tool-swatch" aria-hidden="true"></span> 高亮</button>
+    <button id="noteSelectionButton" type="button"><span aria-hidden="true">✎</span> 批注</button>
+  </div>
+  <div id="pdfAnnotationPopover" class="pdf-annotation-popover" role="dialog" aria-label="PDF 批注" hidden>
+    <button id="closeAnnotationPopover" class="pdf-annotation-close" type="button" aria-label="关闭" title="关闭">&times;</button>
+    <strong class="pdf-annotation-title">高亮批注</strong>
+    <p id="annotationSelectedText" class="pdf-annotation-quote"></p>
+    <div id="annotationColors" class="annotation-colors" role="group" aria-label="高亮颜色">
+      <button class="active" type="button" data-annotation-color="yellow" title="黄色" aria-label="黄色"></button>
+      <button type="button" data-annotation-color="green" title="绿色" aria-label="绿色"></button>
+      <button type="button" data-annotation-color="blue" title="蓝色" aria-label="蓝色"></button>
+      <button type="button" data-annotation-color="coral" title="红色" aria-label="红色"></button>
+    </div>
+    <textarea id="annotationNote" rows="3" maxlength="4000" placeholder="添加批注"></textarea>
+    <div class="pdf-annotation-footer">
+      <button id="deleteAnnotationButton" class="annotation-delete-button" type="button">删除</button>
+      <button id="saveAnnotationButton" class="primary-button" type="button">保存</button>
+    </div>
+  </div>
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

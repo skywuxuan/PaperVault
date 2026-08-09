@@ -1,0 +1,27 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local configuration and runtime logs
+.env
+.env.*
+!.env.example
+*.log
+
+# PaperVault keeps user papers, settings, generated previews, and models here.
+# Preserve only the empty directory markers in version control.
+data/*
+!data/.gitkeep
+!data/uploads/
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

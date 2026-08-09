@@ -1,0 +1,672 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterator
+
+
+SCHEMA = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS papers (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    authors TEXT NOT NULL DEFAULT '',
+    publication_year INTEGER,
+    doi TEXT NOT NULL DEFAULT '',
+    original_filename TEXT NOT NULL,
+    stored_filename TEXT NOT NULL UNIQUE,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    page_count INTEGER NOT NULL DEFAULT 0,
+    extracted_text TEXT NOT NULL DEFAULT '',
+    summary_pairs TEXT NOT NULL DEFAULT '[]',
+    visual_assets TEXT NOT NULL DEFAULT '[]',
+    summary_status TEXT NOT NULL DEFAULT 'pending',
+    summary_provider TEXT NOT NULL DEFAULT '',
+    summary_model TEXT NOT NULL DEFAULT '',
+    summary_error TEXT NOT NULL DEFAULT '',
+    rating INTEGER NOT NULL DEFAULT 0 CHECK(rating BETWEEN 0 AND 3),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    color TEXT NOT NULL DEFAULT '#28786f',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_tags (
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (paper_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS vocabulary_entries (
+    id TEXT PRIMARY KEY,
+    term_en TEXT NOT NULL COLLATE NOCASE,
+    translation_zh TEXT NOT NULL DEFAULT '',
+    context_en TEXT NOT NULL DEFAULT '',
+    context_zh TEXT NOT NULL DEFAULT '',
+    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+    paper_title TEXT NOT NULL DEFAULT '',
+    source_pair_index INTEGER,
+    source_page INTEGER,
+    phonetic_us TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'learning' CHECK(status IN ('learning', 'mastered')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS translation_cache (
+    cache_key TEXT PRIMARY KEY,
+    source_text TEXT NOT NULL,
+    translation_zh TEXT NOT NULL,
+    note_zh TEXT NOT NULL DEFAULT '',
+    definition_zh TEXT NOT NULL DEFAULT '',
+    context_translation_zh TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_annotations (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    page INTEGER NOT NULL,
+    start_word INTEGER NOT NULL,
+    end_word INTEGER NOT NULL,
+    selected_text TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    color TEXT NOT NULL DEFAULT 'yellow' CHECK(color IN ('yellow', 'green', 'blue', 'coral')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_papers_created_at ON papers(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_tags_tag_id ON paper_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_vocabulary_updated_at ON vocabulary_entries(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vocabulary_status ON vocabulary_entries(status);
+CREATE INDEX IF NOT EXISTS idx_annotations_paper_page ON paper_annotations(paper_id, page);
+"""
+
+
+DEFAULT_SETTINGS = {
+    "provider": "local",
+    "base_url": "https://api.openai.com/v1",
+    "model": "gpt-4.1-mini",
+    "api_key": "",
+    "max_input_chars": "60000",
+}
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class Database:
+    def __init__(self, path: Path):
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self.path, timeout=15)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def initialize(self) -> None:
+        with self.connect() as connection:
+            connection.executescript(SCHEMA)
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(papers)").fetchall()
+            }
+            if "visual_assets" not in columns:
+                connection.execute(
+                    "ALTER TABLE papers ADD COLUMN visual_assets TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "summary_model" not in columns:
+                connection.execute(
+                    "ALTER TABLE papers ADD COLUMN summary_model TEXT NOT NULL DEFAULT ''"
+                )
+            if "rating" not in columns:
+                connection.execute(
+                    "ALTER TABLE papers ADD COLUMN rating INTEGER NOT NULL DEFAULT 0"
+                )
+            from .pdf_parser import infer_publication_year
+            for row in connection.execute(
+                """
+                SELECT id, original_filename, extracted_text FROM papers
+                WHERE publication_year IS NULL
+                """
+            ).fetchall():
+                year = infer_publication_year(
+                    str(row["extracted_text"]), str(row["original_filename"])
+                )
+                if year is not None:
+                    connection.execute(
+                        "UPDATE papers SET publication_year = ? WHERE id = ?",
+                        (year, row["id"]),
+                    )
+            vocabulary_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(vocabulary_entries)").fetchall()
+            }
+            if "source_page" not in vocabulary_columns:
+                connection.execute(
+                    "ALTER TABLE vocabulary_entries ADD COLUMN source_page INTEGER"
+                )
+            if "phonetic_us" not in vocabulary_columns:
+                connection.execute(
+                    "ALTER TABLE vocabulary_entries ADD COLUMN phonetic_us TEXT NOT NULL DEFAULT ''"
+                )
+            cache_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(translation_cache)").fetchall()
+            }
+            if "definition_zh" not in cache_columns:
+                connection.execute(
+                    "ALTER TABLE translation_cache ADD COLUMN definition_zh TEXT NOT NULL DEFAULT ''"
+                )
+            if "context_translation_zh" not in cache_columns:
+                connection.execute(
+                    "ALTER TABLE translation_cache ADD COLUMN context_translation_zh TEXT NOT NULL DEFAULT ''"
+                )
+            connection.execute(
+                """
+                UPDATE translation_cache SET note_zh = ''
+                WHERE note_zh = '本地学术词典' OR note_zh LIKE 'Argos 离线翻译%'
+                """
+            )
+            connection.execute(
+                """
+                UPDATE vocabulary_entries SET note = ''
+                WHERE note = '本地学术词典' OR note LIKE 'Argos 离线翻译%'
+                """
+            )
+            from .pronunciation import american_ipa
+            from .offline_translation import ACADEMIC_GLOSSARY
+            for row in connection.execute(
+                "SELECT id, term_en, translation_zh FROM vocabulary_entries"
+            ).fetchall():
+                glossary_key = str(row["term_en"]).casefold().replace("-", " ")
+                glossary_entry = ACADEMIC_GLOSSARY.get(glossary_key)
+                if not glossary_entry:
+                    continue
+                richer_translation = glossary_entry[0]
+                legacy_first_sense = richer_translation.split("；", 1)[0]
+                if str(row["translation_zh"]) == legacy_first_sense and richer_translation != legacy_first_sense:
+                    connection.execute(
+                        "UPDATE vocabulary_entries SET translation_zh = ? WHERE id = ?",
+                        (richer_translation, row["id"]),
+                    )
+            for row in connection.execute(
+                "SELECT id, term_en FROM vocabulary_entries WHERE phonetic_us = ''"
+            ).fetchall():
+                phonetic = american_ipa(str(row["term_en"]))
+                if phonetic:
+                    connection.execute(
+                        "UPDATE vocabulary_entries SET phonetic_us = ? WHERE id = ?",
+                        (phonetic, row["id"]),
+                    )
+            connection.executemany(
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                DEFAULT_SETTINGS.items(),
+            )
+
+    def list_tags(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT t.id, t.name, t.color, COUNT(pt.paper_id) AS paper_count
+                FROM tags t
+                LEFT JOIN paper_tags pt ON pt.tag_id = t.id
+                GROUP BY t.id
+                ORDER BY t.name COLLATE NOCASE
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_tag(self, tag_id: str, name: str, color: str) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO tags(id, name, color, created_at) VALUES (?, ?, ?, ?)",
+                (tag_id, name.strip(), color, now),
+            )
+        return {"id": tag_id, "name": name.strip(), "color": color, "paper_count": 0}
+
+    def update_tag(self, tag_id: str, name: str, color: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE tags SET name = ?, color = ? WHERE id = ?",
+                (name.strip(), color, tag_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return next((tag for tag in self.list_tags() if tag["id"] == tag_id), None)
+
+    def delete_tag(self, tag_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+        return cursor.rowcount > 0
+
+    def list_papers(
+        self,
+        query: str = "",
+        tag_id: str = "",
+        sort: str = "recent",
+        summary_filter: str = "",
+        rating_filter: str = "",
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if query:
+            term = f"%{query.strip()}%"
+            clauses.append(
+                """(
+                    p.title LIKE ? OR p.authors LIKE ? OR p.doi LIKE ? OR
+                    p.summary_pairs LIKE ? OR EXISTS (
+                        SELECT 1 FROM paper_tags spt
+                        JOIN tags st ON st.id = spt.tag_id
+                        WHERE spt.paper_id = p.id AND st.name LIKE ?
+                    )
+                )"""
+            )
+            params.extend([term, term, term, term, term])
+        if tag_id:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM paper_tags fpt WHERE fpt.paper_id = p.id AND fpt.tag_id = ?)"
+            )
+            params.append(tag_id)
+        if summary_filter == "ready":
+            clauses.append("p.summary_status IN ('ready', 'draft', 'edited')")
+        elif summary_filter == "error":
+            clauses.append("p.summary_status = 'error'")
+        elif summary_filter == "pending":
+            clauses.append("p.summary_status IN ('pending', 'generating')")
+        if rating_filter in {"0", "1", "2", "3"}:
+            clauses.append("p.rating = ?")
+            params.append(int(rating_filter))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        order_by = {
+            "recent": "p.created_at DESC",
+            "rating": "p.rating DESC, COALESCE(p.publication_year, 0) DESC, p.created_at DESC",
+            "publication": "COALESCE(p.publication_year, 0) DESC, p.created_at DESC",
+            "title": "p.title COLLATE NOCASE ASC",
+        }.get(sort, "p.created_at DESC")
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT p.*
+                FROM papers p
+                {where}
+                ORDER BY {order_by}
+                """,
+                params,
+            ).fetchall()
+            papers = [self._paper_dict(connection, row) for row in rows]
+        return papers
+
+    def library_facets(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            status_rows = connection.execute(
+                "SELECT summary_status, COUNT(*) AS count FROM papers GROUP BY summary_status"
+            ).fetchall()
+            rating_rows = connection.execute(
+                "SELECT rating, COUNT(*) AS count FROM papers GROUP BY rating"
+            ).fetchall()
+        raw_status = {str(row["summary_status"]): int(row["count"]) for row in status_rows}
+        ratings = {str(value): 0 for value in range(4)}
+        ratings.update({str(row["rating"]): int(row["count"]) for row in rating_rows})
+        return {
+            "total": sum(raw_status.values()),
+            "summary": {
+                "ready": sum(raw_status.get(status, 0) for status in ("ready", "draft", "edited")),
+                "error": raw_status.get("error", 0),
+                "pending": sum(raw_status.get(status, 0) for status in ("pending", "generating")),
+            },
+            "rating": ratings,
+        }
+
+    def get_paper(self, paper_id: str, include_text: bool = False) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            if row is None:
+                return None
+            return self._paper_dict(connection, row, include_text=include_text)
+
+    def insert_paper(self, paper: dict[str, Any], tag_ids: list[str]) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO papers(
+                    id, title, authors, publication_year, doi, original_filename,
+                    stored_filename, file_size, page_count, extracted_text,
+                    summary_pairs, visual_assets, summary_status, summary_provider, summary_model,
+                    summary_error, rating, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    paper["id"], paper["title"], paper.get("authors", ""),
+                    paper.get("publication_year"), paper.get("doi", ""),
+                    paper["original_filename"], paper["stored_filename"],
+                    paper.get("file_size", 0), paper.get("page_count", 0),
+                    paper.get("extracted_text", ""),
+                    json.dumps(paper.get("summary_pairs", []), ensure_ascii=False),
+                    json.dumps(paper.get("visual_assets", []), ensure_ascii=False),
+                    paper.get("summary_status", "pending"),
+                    paper.get("summary_provider", ""), paper.get("summary_model", ""),
+                    paper.get("summary_error", ""),
+                    paper.get("rating", 0),
+                    paper["created_at"], paper["updated_at"],
+                ),
+            )
+            self._replace_paper_tags(connection, paper["id"], tag_ids)
+        result = self.get_paper(paper["id"])
+        assert result is not None
+        return result
+
+    def update_paper(self, paper_id: str, fields: dict[str, Any], tag_ids: list[str] | None) -> dict[str, Any] | None:
+        allowed = {"title", "authors", "publication_year", "doi", "rating", "summary_pairs", "visual_assets", "summary_status", "summary_provider", "summary_model", "summary_error"}
+        updates: list[str] = []
+        values: list[Any] = []
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            updates.append(f"{key} = ?")
+            values.append(
+                json.dumps(value, ensure_ascii=False)
+                if key in {"summary_pairs", "visual_assets"}
+                else value
+            )
+        updates.append("updated_at = ?")
+        values.append(utc_now())
+        values.append(paper_id)
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+            if cursor.rowcount == 0:
+                return None
+            if tag_ids is not None:
+                self._replace_paper_tags(connection, paper_id, tag_ids)
+        return self.get_paper(paper_id)
+
+    def delete_paper(self, paper_id: str) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT stored_filename FROM papers WHERE id = ?", (paper_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
+            return str(row["stored_filename"])
+
+    def list_annotations(self, paper_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM paper_annotations
+                WHERE paper_id = ?
+                ORDER BY page, start_word, created_at
+                """,
+                (paper_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_annotation(self, annotation: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO paper_annotations(
+                    id, paper_id, page, start_word, end_word,
+                    selected_text, note, color, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    annotation["id"], annotation["paper_id"], annotation["page"],
+                    annotation["start_word"], annotation["end_word"],
+                    annotation.get("selected_text", ""), annotation.get("note", ""),
+                    annotation.get("color", "yellow"), now, now,
+                ),
+            )
+        result = self.get_annotation(annotation["id"])
+        assert result is not None
+        return result
+
+    def get_annotation(self, annotation_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM paper_annotations WHERE id = ?", (annotation_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def update_annotation(
+        self, annotation_id: str, note: str, color: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE paper_annotations
+                SET note = ?, color = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (note, color, utc_now(), annotation_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_annotation(annotation_id)
+
+    def delete_annotation(self, annotation_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM paper_annotations WHERE id = ?", (annotation_id,)
+            )
+        return cursor.rowcount > 0
+
+    def list_vocabulary_entries(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM vocabulary_entries
+                ORDER BY updated_at DESC, term_en COLLATE NOCASE
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_vocabulary_entry(self, entry_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM vocabulary_entries WHERE id = ?", (entry_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def create_vocabulary_entry(self, entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        now = utc_now()
+        with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT * FROM vocabulary_entries
+                WHERE term_en = ? COLLATE NOCASE AND translation_zh = ?
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (entry["term_en"], entry["translation_zh"]),
+            ).fetchone()
+            if existing is not None:
+                return dict(existing), False
+            connection.execute(
+                """
+                INSERT INTO vocabulary_entries(
+                    id, term_en, translation_zh, context_en, context_zh,
+                    paper_id, paper_title, source_pair_index, source_page, phonetic_us, note, status,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry["id"], entry["term_en"], entry["translation_zh"],
+                    entry.get("context_en", ""), entry.get("context_zh", ""),
+                    entry.get("paper_id"), entry.get("paper_title", ""),
+                    entry.get("source_pair_index"), entry.get("source_page"),
+                    entry.get("phonetic_us", ""), entry.get("note", ""),
+                    entry.get("status", "learning"), now, now,
+                ),
+            )
+        result = self.get_vocabulary_entry(entry["id"])
+        assert result is not None
+        return result, True
+
+    def update_vocabulary_entry(self, entry_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        allowed = {"term_en", "translation_zh", "phonetic_us", "note", "status"}
+        updates: list[str] = []
+        values: list[Any] = []
+        for key, value in fields.items():
+            if key in allowed:
+                updates.append(f"{key} = ?")
+                values.append(value)
+        if not updates:
+            return self.get_vocabulary_entry(entry_id)
+        updates.append("updated_at = ?")
+        values.extend([utc_now(), entry_id])
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"UPDATE vocabulary_entries SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_vocabulary_entry(entry_id)
+
+    def delete_vocabulary_entry(self, entry_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM vocabulary_entries WHERE id = ?", (entry_id,)
+            )
+        return cursor.rowcount > 0
+
+    def find_vocabulary_translation(self, term_en: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT term_en, translation_zh, phonetic_us, note, context_zh
+                FROM vocabulary_entries
+                WHERE term_en = ? COLLATE NOCASE
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (term_en,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def get_cached_translation(self, cache_key: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM translation_cache WHERE cache_key = ?", (cache_key,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def cache_translation(
+        self, cache_key: str, source_text: str, translation_zh: str, note_zh: str,
+        definition_zh: str = "", context_translation_zh: str = "",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO translation_cache(
+                    cache_key, source_text, translation_zh, note_zh,
+                    definition_zh, context_translation_zh, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    translation_zh = excluded.translation_zh,
+                    note_zh = excluded.note_zh,
+                    definition_zh = excluded.definition_zh,
+                    context_translation_zh = excluded.context_translation_zh,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    cache_key, source_text, translation_zh, note_zh,
+                    definition_zh, context_translation_zh, now, now,
+                ),
+            )
+        result = self.get_cached_translation(cache_key)
+        assert result is not None
+        return result
+
+    def get_settings(self, include_secret: bool = False) -> dict[str, str]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT key, value FROM settings").fetchall()
+        result = {str(row["key"]): str(row["value"]) for row in rows}
+        if not include_secret and result.get("api_key"):
+            result["api_key"] = "********"
+        return result
+
+    def update_settings(self, values: dict[str, Any]) -> dict[str, str]:
+        allowed = set(DEFAULT_SETTINGS)
+        with self.connect() as connection:
+            for key, value in values.items():
+                if key not in allowed or (key == "api_key" and value == "********"):
+                    continue
+                connection.execute(
+                    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, str(value)),
+                )
+        return self.get_settings()
+
+    @staticmethod
+    def _replace_paper_tags(connection: sqlite3.Connection, paper_id: str, tag_ids: list[str]) -> None:
+        connection.execute("DELETE FROM paper_tags WHERE paper_id = ?", (paper_id,))
+        connection.executemany(
+            "INSERT OR IGNORE INTO paper_tags(paper_id, tag_id) VALUES (?, ?)",
+            [(paper_id, tag_id) for tag_id in dict.fromkeys(tag_ids)],
+        )
+
+    @staticmethod
+    def _paper_dict(
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        include_text: bool = False,
+    ) -> dict[str, Any]:
+        data = dict(row)
+        for json_field in ("summary_pairs", "visual_assets"):
+            try:
+                data[json_field] = json.loads(data.get(json_field) or "[]")
+            except json.JSONDecodeError:
+                data[json_field] = []
+        tags = connection.execute(
+            """
+            SELECT t.id, t.name, t.color
+            FROM tags t
+            JOIN paper_tags pt ON pt.tag_id = t.id
+            WHERE pt.paper_id = ?
+            ORDER BY t.name COLLATE NOCASE
+            """,
+            (row["id"],),
+        ).fetchall()
+        data["tags"] = [dict(tag) for tag in tags]
+        data["text_length"] = len(data.get("extracted_text", ""))
+        if not include_text:
+            data.pop("extracted_text", None)
+        return data
