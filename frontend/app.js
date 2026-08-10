@@ -2,6 +2,7 @@
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const CURRENT_FIGURE_PROMPT_VERSION = "figure-analysis-v2";
 
 const state = {
   papers: [],
@@ -1563,7 +1564,9 @@ function renderAnalysisVersionSelect(type, select) {
   runs.forEach((run, index) => {
     const option = document.createElement("option");
     option.value = run.id;
-    option.textContent = `${index === 0 ? "最新" : `历史 ${index}`} · ${formatDate(run.created_at)} · ${run.provider === "local" ? "本地" : run.model || "模型"}`;
+    const legacyLabel = type === "figure_analysis"
+      && run.prompt_version !== CURRENT_FIGURE_PROMPT_VERSION ? " · 旧版" : "";
+    option.textContent = `${index === 0 ? "最新" : `历史 ${index}`} · ${formatDate(run.created_at)} · ${run.provider === "local" ? "本地" : run.model || "模型"}${legacyLabel}`;
     select.append(option);
   });
   select.hidden = runs.length < 2;
@@ -1657,6 +1660,14 @@ function renderQuickReadContent(run) {
 function renderFigureAnalysisContent(run) {
   const container = $("#figureAnalysisContent");
   container.replaceChildren();
+  if (run && run.prompt_version !== CURRENT_FIGURE_PROMPT_VERSION) {
+    container.append(make(
+      "p",
+      "analysis-empty",
+      "当前结果来自旧版整页候选规则，已停止展示。点击“重新分析”即可按图表标题识别并裁剪真实图表区域。",
+    ));
+    return;
+  }
   const figures = run?.content?.figures || [];
   if (!figures.length) {
     container.append(make(

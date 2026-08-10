@@ -173,6 +173,7 @@ must continue to use temporary data directories.
 - Existing 40–55 pair bilingual summaries remain the independent deep-read source in `papers.summary_pairs`.
 - Quick read is stored separately and covers the headline, motivation, method, findings, contributions, limitations, and reading guide with PDF page evidence.
 - Figure analysis requires numbered Figure/Fig./Table captions and uses PyMuPDF to crop the matching image, vector, or table region instead of treating incidental body references or complete pages as figures.
+- Saved v1 whole-page figure runs remain available as labeled history but are no longer rendered as current visual evidence; the UI asks for an explicit re-analysis before showing v2 crops.
 - Figure analysis is safely text-grounded when the configured model has no image capability; it never claims pixel inspection.
 - Analysis input hashes include paper content and, for figures, actual image-file content hashes rather than only file paths.
 - `analysis_jobs` persists queued/running/succeeded/failed states, attempts, errors, provider/model, tokens, duration, input hash, and prompt version.
