@@ -57,9 +57,11 @@ class DatabaseMigrationTestCase(unittest.TestCase):
             self.assertEqual(paper["title"], "Legacy title")
             self.assertEqual(paper["extracted_text"], "Stable legacy text")
             self.assertEqual(paper["summary_pairs"][0]["zh"], "证据")
+            self.assertEqual(paper["summary_blocks"], [])
+            self.assertEqual(paper["summary_translation_status"], "none")
             self.assertEqual(paper["read_state"], "unread")
             with database.connect() as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
 
     def test_chunks_and_running_jobs_survive_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

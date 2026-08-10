@@ -193,6 +193,7 @@
           <div><span class="panel-index chinese-index">03</span><h2 id="chineseHeading">中文摘要</h2></div>
           <div class="summary-header-tools">
             <span id="termLinkLabel" class="linked-label" title="单击任一侧句子可同步显示对应句"><i></i><b>句对联动</b></span>
+            <button id="translateSummaryButton" class="summary-translate-button" type="button" title="生成中文翻译" aria-label="生成中文翻译" hidden>&#8635;</button>
             <button id="downloadMarkdownButton" class="summary-download-button" type="button" title="下载 Markdown 摘要" aria-label="下载 Markdown 摘要">↓</button>
             <button class="panel-collapse-button" type="button" data-collapse-panel="chinese" title="折叠中文摘要" aria-label="折叠中文摘要" aria-expanded="true">−</button>
           </div>
@@ -339,12 +340,14 @@
           <legend>标签</legend>
           <div id="editTagPicker" class="tag-picker"></div>
         </fieldset>
-        <div class="summary-editor-heading">
-          <h3>双语摘要句对</h3><span>每行对应一个联动段落</span>
-        </div>
-        <div class="summary-editor-grid">
-          <label class="field"><span>English</span><textarea name="summary_en" rows="10"></textarea></label>
-          <label class="field"><span>中文</span><textarea name="summary_zh" rows="10"></textarea></label>
+        <div id="legacySummaryEditor">
+          <div class="summary-editor-heading">
+            <h3>双语摘要句对</h3><span>每行对应一个联动段落</span>
+          </div>
+          <div class="summary-editor-grid">
+            <label class="field"><span>English</span><textarea name="summary_en" rows="10"></textarea></label>
+            <label class="field"><span>中文</span><textarea name="summary_zh" rows="10"></textarea></label>
+          </div>
         </div>
       </div>
       <div class="modal-footer">
@@ -384,10 +387,19 @@
         </label>
         <div id="remoteSettings" class="remote-settings">
           <label class="field"><span>API Base URL</span><input name="base_url" type="url" placeholder="https://api.openai.com/v1"></label>
+          <label class="field"><span>默认模型</span><input name="model" type="text" placeholder="gpt-4.1-mini"></label>
           <div class="form-grid two-columns">
-            <label class="field"><span>模型</span><input name="model" type="text" placeholder="gpt-4.1-mini"></label>
-            <label class="field"><span>最大输入字符</span><input name="max_input_chars" type="number" min="5000" max="300000"></label>
+            <label class="field"><span>英文分析模型</span><input name="analysis_model" type="text" placeholder="留空则使用默认模型"></label>
+            <label class="field"><span>中文翻译模型</span><input name="translation_model" type="text" placeholder="留空则使用默认模型"></label>
+            <label class="field"><span>模型上下文长度（tokens）</span><input name="context_window_tokens" type="number" min="16000" max="2000000" placeholder="自动识别"></label>
+            <label class="field"><span>英文分析推理强度</span>
+              <select name="analysis_reasoning_effort">
+                <option value="high">High（推荐）</option>
+                <option value="max">Max（更高成本）</option>
+              </select>
+            </label>
           </div>
+          <p class="settings-inline-note">Pro 类模型通常更适合最终综合，但不会自动切换；英文分析和中文翻译始终按你的选择调用。</p>
           <label class="field"><span>API Key</span><input name="api_key" type="password" autocomplete="off" placeholder="保留现有密钥"></label>
         </div>
         <div class="local-note"><span aria-hidden="true">&#9632;</span><p>配置和密钥仅保存在本机 SQLite 数据库中，也可通过 <code>PAPER_VAULT_API_KEY</code> 环境变量提供。</p></div>

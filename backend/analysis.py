@@ -89,6 +89,7 @@ def analysis_input_hash(
         "title": paper.get("title", ""),
         "text": paper.get("extracted_text", ""),
         "summary_pairs": paper.get("summary_pairs", []),
+        "summary_blocks": paper.get("summary_blocks", []),
     }
     if analysis_type == "figure_analysis":
         assets = []
@@ -130,6 +131,18 @@ def local_quick_read(
     paper: dict[str, Any], chunks: list[dict[str, Any]]
 ) -> dict[str, Any]:
     pairs = [pair for pair in paper.get("summary_pairs", []) if isinstance(pair, dict)]
+    if paper.get("summary_blocks"):
+        pairs = [
+            {
+                "section_en": "",
+                "section_zh": "",
+                "en": block.get("text_en", ""),
+                "zh": block.get("text_zh", ""),
+                "page_refs": block.get("page_refs", []),
+            }
+            for block in paper.get("summary_blocks", [])
+            if isinstance(block, dict) and block.get("type") != "heading"
+        ]
     used: set[int] = set()
 
     def select(keywords: tuple[str, ...]) -> dict[str, Any]:

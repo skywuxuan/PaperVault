@@ -27,6 +27,45 @@ class SummaryFormatTestCase(unittest.TestCase):
         )
         self.assertEqual(payload["thinking"], {"type": "disabled"})
 
+    def test_deepseek_analysis_enables_high_effort_thinking(self) -> None:
+        payload = {"model": "deepseek-v4-flash", "temperature": 0.2}
+        _apply_provider_controls(
+            payload,
+            {
+                "base_url": "https://api.deepseek.com",
+                "model": "deepseek-v4-flash",
+                "analysis_reasoning_effort": "high",
+            },
+            task="analysis",
+        )
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
+        self.assertEqual(payload["reasoning_effort"], "high")
+        self.assertNotIn("temperature", payload)
+        self.assertNotIn("input_image", payload)
+        self.assertNotIn("file", payload)
+
+    def test_deepseek_max_effort_requires_explicit_setting(self) -> None:
+        payload = {"model": "deepseek-v4-flash"}
+        _apply_provider_controls(
+            payload,
+            {
+                "base_url": "https://api.deepseek.com",
+                "analysis_reasoning_effort": "max",
+            },
+            task="analysis",
+        )
+        self.assertEqual(payload["reasoning_effort"], "max")
+
+    def test_deepseek_translation_disables_thinking(self) -> None:
+        payload = {"model": "deepseek-v4-flash", "reasoning_effort": "high"}
+        _apply_provider_controls(
+            payload,
+            {"base_url": "https://api.deepseek.com"},
+            task="translation",
+        )
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", payload)
+
     def test_other_openai_compatible_providers_are_unchanged(self) -> None:
         payload = {"model": "deepseek-v4-flash"}
         _apply_provider_controls(

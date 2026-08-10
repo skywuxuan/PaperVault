@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 SCHEMA = """
@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS papers (
     page_count INTEGER NOT NULL DEFAULT 0,
     extracted_text TEXT NOT NULL DEFAULT '',
     summary_pairs TEXT NOT NULL DEFAULT '[]',
+    summary_blocks TEXT NOT NULL DEFAULT '[]',
+    summary_paper_title TEXT NOT NULL DEFAULT '',
+    summary_translation_status TEXT NOT NULL DEFAULT 'none',
+    summary_translation_error TEXT NOT NULL DEFAULT '',
+    summary_analysis_model TEXT NOT NULL DEFAULT '',
+    summary_translation_model TEXT NOT NULL DEFAULT '',
+    summary_prompt_version TEXT NOT NULL DEFAULT '',
     visual_assets TEXT NOT NULL DEFAULT '[]',
     summary_status TEXT NOT NULL DEFAULT 'pending',
     summary_provider TEXT NOT NULL DEFAULT '',
@@ -171,6 +178,10 @@ DEFAULT_SETTINGS = {
     "base_url": "https://api.openai.com/v1",
     "model": "gpt-4.1-mini",
     "api_key": "",
+    "analysis_model": "",
+    "translation_model": "",
+    "context_window_tokens": "",
+    "analysis_reasoning_effort": "high",
     "max_input_chars": "60000",
 }
 
@@ -218,6 +229,20 @@ class Database:
                 connection.execute(
                     "ALTER TABLE papers ADD COLUMN summary_model TEXT NOT NULL DEFAULT ''"
                 )
+            summary_columns = {
+                "summary_blocks": "TEXT NOT NULL DEFAULT '[]'",
+                "summary_paper_title": "TEXT NOT NULL DEFAULT ''",
+                "summary_translation_status": "TEXT NOT NULL DEFAULT 'none'",
+                "summary_translation_error": "TEXT NOT NULL DEFAULT ''",
+                "summary_analysis_model": "TEXT NOT NULL DEFAULT ''",
+                "summary_translation_model": "TEXT NOT NULL DEFAULT ''",
+                "summary_prompt_version": "TEXT NOT NULL DEFAULT ''",
+            }
+            for column, declaration in summary_columns.items():
+                if column not in columns:
+                    connection.execute(
+                        f"ALTER TABLE papers ADD COLUMN {column} {declaration}"
+                    )
             if "rating" not in columns:
                 connection.execute(
                     "ALTER TABLE papers ADD COLUMN rating INTEGER NOT NULL DEFAULT 0"
@@ -398,21 +423,21 @@ class Database:
             clauses.append(
                 """(
                     p.title LIKE ? OR p.authors LIKE ? OR p.doi LIKE ? OR
-                    p.summary_pairs LIKE ? OR EXISTS (
+                    p.summary_pairs LIKE ? OR p.summary_blocks LIKE ? OR EXISTS (
                         SELECT 1 FROM paper_tags spt
                         JOIN tags st ON st.id = spt.tag_id
                         WHERE spt.paper_id = p.id AND st.name LIKE ?
                     )
                 )"""
             )
-            params.extend([term, term, term, term, term])
+            params.extend([term, term, term, term, term, term])
         if tag_id:
             clauses.append(
                 "EXISTS (SELECT 1 FROM paper_tags fpt WHERE fpt.paper_id = p.id AND fpt.tag_id = ?)"
             )
             params.append(tag_id)
         if summary_filter == "ready":
-            clauses.append("p.summary_status IN ('ready', 'draft', 'edited')")
+            clauses.append("p.summary_status IN ('ready', 'draft', 'edited', 'english_ready', 'translating', 'translation_error')")
         elif summary_filter == "error":
             clauses.append("p.summary_status = 'error'")
         elif summary_filter == "pending":
@@ -454,7 +479,7 @@ class Database:
         return {
             "total": sum(raw_status.values()),
             "summary": {
-                "ready": sum(raw_status.get(status, 0) for status in ("ready", "draft", "edited")),
+                "ready": sum(raw_status.get(status, 0) for status in ("ready", "draft", "edited", "english_ready", "translating", "translation_error")),
                 "error": raw_status.get("error", 0),
                 "pending": sum(raw_status.get(status, 0) for status in ("pending", "generating")),
             },
@@ -477,9 +502,11 @@ class Database:
                 INSERT INTO papers(
                     id, title, authors, publication_year, doi, original_filename,
                     stored_filename, file_size, page_count, extracted_text,
-                    summary_pairs, visual_assets, summary_status, summary_provider, summary_model,
-                    summary_error, rating, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    summary_pairs, summary_blocks, summary_paper_title, summary_translation_status,
+                    summary_translation_error, summary_analysis_model, summary_translation_model,
+                    summary_prompt_version, visual_assets, summary_status, summary_provider,
+                    summary_model, summary_error, rating, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     paper["id"], paper["title"], paper.get("authors", ""),
@@ -488,6 +515,13 @@ class Database:
                     paper.get("file_size", 0), paper.get("page_count", 0),
                     paper.get("extracted_text", ""),
                     json.dumps(paper.get("summary_pairs", []), ensure_ascii=False),
+                    json.dumps(paper.get("summary_blocks", []), ensure_ascii=False),
+                    paper.get("summary_paper_title", ""),
+                    paper.get("summary_translation_status", "none"),
+                    paper.get("summary_translation_error", ""),
+                    paper.get("summary_analysis_model", ""),
+                    paper.get("summary_translation_model", ""),
+                    paper.get("summary_prompt_version", ""),
                     json.dumps(paper.get("visual_assets", []), ensure_ascii=False),
                     paper.get("summary_status", "pending"),
                     paper.get("summary_provider", ""), paper.get("summary_model", ""),
@@ -502,7 +536,13 @@ class Database:
         return result
 
     def update_paper(self, paper_id: str, fields: dict[str, Any], tag_ids: list[str] | None) -> dict[str, Any] | None:
-        allowed = {"title", "authors", "publication_year", "doi", "rating", "read_state", "summary_pairs", "visual_assets", "summary_status", "summary_provider", "summary_model", "summary_error"}
+        allowed = {
+            "title", "authors", "publication_year", "doi", "rating", "read_state",
+            "summary_pairs", "summary_blocks", "summary_paper_title", "summary_translation_status",
+            "summary_translation_error", "summary_analysis_model", "summary_translation_model",
+            "summary_prompt_version", "visual_assets", "summary_status", "summary_provider",
+            "summary_model", "summary_error",
+        }
         updates: list[str] = []
         values: list[Any] = []
         for key, value in fields.items():
@@ -511,7 +551,7 @@ class Database:
             updates.append(f"{key} = ?")
             values.append(
                 json.dumps(value, ensure_ascii=False)
-                if key in {"summary_pairs", "visual_assets"}
+                if key in {"summary_pairs", "summary_blocks", "visual_assets"}
                 else value
             )
         updates.append("updated_at = ?")
@@ -1060,7 +1100,7 @@ class Database:
         include_text: bool = False,
     ) -> dict[str, Any]:
         data = dict(row)
-        for json_field in ("summary_pairs", "visual_assets"):
+        for json_field in ("summary_pairs", "summary_blocks", "visual_assets"):
             try:
                 data[json_field] = json.loads(data.get(json_field) or "[]")
             except json.JSONDecodeError:

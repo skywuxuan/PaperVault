@@ -19,7 +19,7 @@ Windows desktop development startup:
 Desktop health response:
 
 ```json
-{"status":"ok","version":"2.0.1"}
+{"status":"ok","version":"2.1.0"}
 ```
 
 The desktop shell chooses an ephemeral localhost port. The legacy browser mode
@@ -121,11 +121,17 @@ Current model configuration:
 provider: openai_compatible
 base_url: https://api.deepseek.com
 model: deepseek-v4-flash
-max_input_chars: 60000
+analysis_model: empty (inherits model)
+translation_model: empty (inherits model)
+context_window_tokens: empty (DeepSeek V4 auto-detects 1M)
+analysis_reasoning_effort: high
 api_key: stored locally, masked by API
 ```
 
-`backend/llm.py` disables DeepSeek thinking mode for the official DeepSeek host and `deepseek-v4*` models. This prevents reasoning tokens from consuming the response budget before the structured summary is returned.
+For the official DeepSeek host and `deepseek-v4*` models, English deep analysis
+enables thinking with `high` effort (or user-selected `max`). Translation and
+JSON repair disable thinking. The adapter reads only final `content` and never
+stores or displays `reasoning_content`. It does not silently change flash to pro.
 
 ## 5. Current Library State
 
@@ -138,8 +144,9 @@ was opened with SQLite `mode=ro&immutable=1` only. Its schema remained at
 compatibility check.
 
 An exact schema-only clone, containing no settings, credentials, paper rows, or
-PDF content, migrated successfully to schema version 2 and added analysis jobs,
-analysis runs, page chunks, read state, and recycle-bin fields. Automated tests
+PDF content, migrated successfully to schema version 3 and added analysis jobs,
+analysis runs, page chunks, read state, recycle-bin fields, and structured deep-summary
+columns. Automated tests
 must continue to use temporary data directories.
 
 ## 6. Implemented Features
@@ -159,18 +166,20 @@ must continue to use temporary data directories.
 
 - Configurable OpenAI-compatible LLM.
 - DeepSeek official API currently active.
-- Structured 40-55 sentence-pair report organized into paper information, background, architecture, data/training, experiments, quantitative results, conclusions, limitations, and innovations.
-- English and Chinese are stored as aligned sentence pairs.
-- Markdown-like document rendering with sections, numbered statements, evidence page references, and inline figures.
-- Clicking either language sentence highlights the pair and aligns the corresponding sentence to the same viewport height in the other column.
-- Clicking a summary figure synchronizes the corresponding figure in the other language and the source PDF page.
-- Chinese summary can be exported as Markdown.
-- Existing summaries are preserved if a regeneration request fails.
-- Latest typography fix: decimal/scientific/numeric values such as `0.91`, `5e-5`, and `1.2M` inherit the exact body font size, weight, and line height instead of being rendered as bold keywords.
+- Local PDF parsing preserves `[Page N]` labels, headings, paragraphs, captions, table text, and nearby formula explanations. Repeated edge headers/footers and obvious reference entries are filtered conservatively.
+- Input budget is derived from the configured/model-family context length. DeepSeek V4 uses a 1M-token context contract; ordinary papers are sent in one complete request with no `text[:60000]` truncation.
+- Oversized inputs are reduced only when necessary, at page/paragraph/complete-sentence boundaries, followed by one coherent synthesis in original paper order.
+- DeepSeek receives text messages only. PaperVault never sends `file`, PDF, or `input_image`, and non-visual analysis never claims pixel inspection.
+- English output is an unrestricted ordered `summary_blocks` document with level-2 sections, paper-specific level-3 modules, coherent paragraphs, true parallel bullets, and validated page references.
+- English blocks are saved immediately with status `english_ready`; translation is a second call containing only block id/type/English text and is merged strictly by stable id.
+- Translation failure leaves the English report visible as `translation_error`; `POST /translate-summary` retries Chinese only and never reruns English analysis.
+- Truncated English output is continued after the last complete block and merged; incomplete JSON is never accepted. JSON repair runs with thinking disabled.
+- Reader rendering is an unframed long document. Consecutive bullets form one list, page buttons jump to PDF, and clicking either language block aligns its counterpart to the same viewport height.
+- Markdown/JSON exports support `summary_blocks`; legacy `summary_pairs` remains readable and retains the previous sentence-pair view.
 
 ### Layered analysis and versioned jobs
 
-- Existing 40–55 pair bilingual summaries remain the independent deep-read source in `papers.summary_pairs`.
+- New deep reads use `papers.summary_blocks`; existing 40–55 pair summaries remain compatible in `papers.summary_pairs`.
 - Quick read is stored separately and covers the headline, motivation, method, findings, contributions, limitations, and reading guide with PDF page evidence.
 - Figure analysis requires numbered Figure/Fig./Table captions and uses PyMuPDF to crop the matching image, vector, or table region instead of treating incidental body references or complete pages as figures.
 - Saved v1 whole-page figure runs remain available as labeled history but are no longer rendered as current visual evidence; the UI asks for an explicit re-analysis before showing v2 crops.
@@ -253,9 +262,13 @@ backend/analysis.py
   Quick-read, figure-analysis, stable text-chunking, input hashing, and
   retrieval-constrained cited-question logic.
 
+backend/deep_summary.py
+  Page-labelled input cleanup/budgeting/chunking, ordered English report blocks,
+  truncation continuation, strict translation alignment, and JSON validation.
+
 backend/llm.py
-  Detailed summary prompt, OpenAI-compatible request, provider controls,
-  structured response parsing, local fallback summary, and term alignment.
+  OpenAI-compatible transport, task-specific DeepSeek thinking controls,
+  local fallback summary, and term alignment.
 
 backend/pdf_parser.py
   PDF metadata/text extraction, preview rendering, word coordinates,
@@ -279,7 +292,12 @@ frontend/styles.css
 
 tests/test_api.py
   API lifecycle, upload/dedup, facets, batch actions, annotations,
-  translation, vocabulary, range requests, settings, and cleanup.
+  English-first summary persistence, translation-only retry, vocabulary,
+  range requests, settings, and cleanup.
+
+tests/test_deep_summary.py
+  Full input beyond 60,000 characters, page-labelled chunking, block validation,
+  truncated output continuation, translation id/number checks, and request safety.
 
 tests/test_analysis.py
   Legacy-schema migration, restart recovery, chunk retrieval, analysis
@@ -315,6 +333,7 @@ GET    /api/papers/{id}
 PUT    /api/papers/{id}
 DELETE /api/papers/{id}
 POST   /api/papers/{id}/generate-summary
+POST   /api/papers/{id}/translate-summary
 POST   /api/papers/batch
 
 GET    /api/papers/{id}/analyses
@@ -368,12 +387,12 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-33 tests passed
+44 tests passed
 JavaScript syntax check passed
 Windows PyInstaller `onedir` build passed
-Packaged EXE health check returned version 2.0.1 using a temporary data directory
-Desktop and 390px-wide browser interaction and screenshot QA passed against temporary data
-Connected/cancelable highlights, cropped figure/table assets, bilingual sentence alignment, compact library rows, and invalid-author fallback were exercised
+Packaged EXE health check returned version 2.1.0 using a temporary data directory
+1440x900 and 390x844 browser interaction/screenshot QA passed against synthetic temporary data
+Structured heading/paragraph/list layout, PDF page links, model settings, and bilingual block alignment (0.2px observed delta) were exercised
 No browser console warnings or errors in the final check
 ```
 
@@ -396,7 +415,7 @@ The API tests use a temporary data directory and do not alter the real library.
 These are not regressions, but they are the most useful next development areas:
 
 1. Add a signed Windows installer, code signing, and an update delivery strategy around the verified portable desktop bundle.
-2. Move detailed bilingual deep-read generation into the persistent job/run model while preserving the current `summary_pairs` compatibility contract.
+2. Move structured deep-read generation into the persistent job/run history model while preserving `summary_blocks` and legacy `summary_pairs` compatibility.
 3. Optimize large libraries: add lightweight list projections and pagination/virtualization instead of returning complete summary pairs.
 4. Add automated frontend interaction coverage for the four reader modes and source-page navigation.
 5. Add explicit backup/restore and recycle-bin management UI for the entire `data` directory.
@@ -410,5 +429,5 @@ Use this as the first message in the next development conversation:
 请先完整阅读：
 C:\Users\skywu\Documents\Codex\PaperVault\HANDOFF.md
 
-继续开发 PaperVault 2.0.1。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出或复制 API Key。真实库最近只读观察为 9 条记录，不要按旧交接强制改回 4 条。沿用现有 `/api/*`、持久化分析任务、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
+继续开发 PaperVault 2.1.0。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出或复制 API Key。真实库最近观察为 9 条记录，不要按旧交接强制改回 4 条。沿用现有 `/api/*`、`summary_blocks` + legacy `summary_pairs` 兼容层、持久化分析任务、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
 ```

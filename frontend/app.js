@@ -56,6 +56,9 @@ const statusLabels = {
   pending: "待生成",
   generating: "生成中",
   ready: "AI 摘要",
+  english_ready: "英文完成",
+  translating: "中文翻译中",
+  translation_error: "英文完成，中文翻译失败",
   draft: "离线索引",
   edited: "人工编辑",
   error: "生成失败",
@@ -79,7 +82,7 @@ async function activateDesktopRuntime() {
 window.addEventListener("pywebviewready", activateDesktopRuntime);
 
 function summarySource(paper) {
-  if (paper.summary_status === "generating" || paper.summary_status === "error") {
+  if (["generating", "english_ready", "translating", "translation_error", "error"].includes(paper.summary_status)) {
     return statusLabels[paper.summary_status];
   }
   if (paper.summary_provider === "openai_compatible") {
@@ -143,6 +146,11 @@ function formatDate(value) {
 }
 
 function paperSnippet(paper) {
+  const blocks = (paper.summary_blocks || []).filter((block) => block.type !== "heading");
+  if (blocks.length) {
+    const preferred = blocks.find((block) => block.text_zh) || blocks[0];
+    return preferred.text_zh || preferred.text_en || "";
+  }
   const pairs = paper.summary_pairs || [];
   if (!pairs.length) return paper.summary_error || "尚未生成摘要";
   const preferred = pairs.find((pair) => pair.zh);
@@ -562,6 +570,8 @@ function exportSelectedPapers(format) {
       rating: paper.rating,
       tags: paper.tags.map((tag) => tag.name),
       summary_status: paper.summary_status,
+      summary_paper_title: paper.summary_paper_title,
+      summary_blocks: paper.summary_blocks,
       summary_pairs: paper.summary_pairs,
     }));
     downloadTextFile(
@@ -576,10 +586,15 @@ function exportSelectedPapers(format) {
       const metadata = [paper.authors, paper.publication_year, paper.doi].filter(Boolean).join(" · ");
       if (metadata) lines.push(`> ${metadata}`, "");
       if (paper.tags.length) lines.push(`标签：${paper.tags.map((tag) => `\`${tag.name}\``).join(" ")}`, "");
-      lines.push("### 中文摘要", "");
-      lines.push(...(paper.summary_pairs || []).map((pair) => `- ${pair.zh || pair.en}`).filter((line) => line !== "- "));
-      lines.push("", "### English Summary", "");
-      lines.push(...(paper.summary_pairs || []).map((pair) => `- ${pair.en || pair.zh}`).filter((line) => line !== "- "));
+      if (paper.summary_blocks?.length) {
+        lines.push("### 中文完整总结", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "zh", 1));
+        lines.push("", "### Complete English Report", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "en", 1));
+      } else {
+        lines.push("### 中文摘要", "");
+        lines.push(...(paper.summary_pairs || []).map((pair) => `- ${pair.zh || pair.en}`).filter((line) => line !== "- "));
+        lines.push("", "### English Summary", "");
+        lines.push(...(paper.summary_pairs || []).map((pair) => `- ${pair.en || pair.zh}`).filter((line) => line !== "- "));
+      }
       lines.push("", "---", "");
     });
     downloadTextFile(
@@ -589,6 +604,30 @@ function exportSelectedPapers(format) {
     );
   }
   toast(`已导出 ${papers.length} 篇论文`);
+}
+
+function summaryBlocksToMarkdown(blocks, language, headingDepthOffset = 0) {
+  const key = language === "zh" ? "text_zh" : "text_en";
+  const fallbackKey = language === "zh" ? "text_en" : "text_zh";
+  const lines = [];
+  for (const block of blocks || []) {
+    const text = String(block[key] || block[fallbackKey] || "").trim();
+    if (!text) continue;
+    const refs = Array.isArray(block.page_refs) && block.page_refs.length
+      ? ` _(p. ${block.page_refs.join(", ")})_`
+      : "";
+    if (block.type === "heading") {
+      const depth = Math.min(6, Math.max(2, Number(block.level) || 2) + headingDepthOffset);
+      if (lines.length && lines.at(-1) !== "") lines.push("");
+      lines.push(`${"#".repeat(depth)} ${text}${refs}`, "");
+    } else if (block.type === "bullet") {
+      lines.push(`- ${markdownEmphasis(text)}${refs}`);
+    } else {
+      lines.push(`${markdownEmphasis(text)}${refs}`, "");
+    }
+  }
+  while (lines.at(-1) === "") lines.pop();
+  return lines;
 }
 
 function downloadTextFile(filename, content, type) {
@@ -1446,12 +1485,27 @@ function renderReader() {
   status.className = `status-pill ${paper.summary_status || "pending"}`;
   status.textContent = summarySource(paper);
   status.title = paper.summary_provider === "openai_compatible"
-    ? `摘要模型：${paper.summary_model || "未记录"}`
+    ? `英文分析：${paper.summary_analysis_model || paper.summary_model || "未记录"}；中文翻译：${paper.summary_translation_model || "未记录"}`
     : `摘要来源：${summarySource(paper)}（未调用外部模型）`;
+  const usesBlocks = Boolean(paper.summary_blocks?.length);
   const termLabel = $("#termLinkLabel b");
-  termLabel.textContent = "句对联动";
-  termLabel.parentElement.title = "单击任一侧句子可同步显示对应句";
-  renderSummaries(paper.summary_pairs || [], paper.summary_error, paper.visual_assets || [], paper.id);
+  termLabel.textContent = usesBlocks ? "段落联动" : "句对联动";
+  termLabel.parentElement.title = usesBlocks
+    ? "单击任一侧段落可将对应译文对齐到相同高度"
+    : "单击任一侧句子可同步显示对应句";
+  const translateButton = $("#translateSummaryButton");
+  translateButton.hidden = !usesBlocks || paper.summary_translation_status === "ready";
+  translateButton.disabled = paper.summary_status === "translating";
+  translateButton.title = paper.summary_status === "translation_error"
+    ? "仅重新翻译中文，不重新运行英文分析"
+    : "生成中文翻译";
+  renderSummaries(
+    paper.summary_pairs || [],
+    paper.summary_error || paper.summary_translation_error,
+    paper.visual_assets || [],
+    paper.id,
+    paper.summary_blocks || [],
+  );
   renderAnalysisPanels();
   renderQaPanel();
   renderNotesPanel();
@@ -1801,12 +1855,17 @@ function renderNotesPanel() {
   }
 }
 
-function renderSummaries(pairs, error = "", visualAssets = [], paperId = "") {
+function renderSummaries(pairs, error = "", visualAssets = [], paperId = "", blocks = []) {
   const english = $("#englishSummary");
   const chinese = $("#chineseSummary");
   english.replaceChildren();
   chinese.replaceChildren();
   state.activeVisualAssetKey = null;
+  if (blocks.length) {
+    renderStructuredReport(english, blocks, "en");
+    renderStructuredReport(chinese, blocks, "zh");
+    return;
+  }
   if (!pairs.length) {
     const message = error || "尚未生成摘要";
     english.append(make("div", "summary-empty", message));
@@ -1815,6 +1874,133 @@ function renderSummaries(pairs, error = "", visualAssets = [], paperId = "") {
   }
   renderMarkdownReport(english, pairs, "en", visualAssets, paperId);
   renderMarkdownReport(chinese, pairs, "zh", visualAssets, paperId);
+}
+
+function renderStructuredReport(container, blocks, language) {
+  const heading = make("header", "markdown-document-heading structured-document-heading");
+  heading.append(
+    make("p", "markdown-document-kicker", "PAPER REPORT"),
+    make(
+      "h1",
+      "markdown-document-title",
+      language === "zh" ? "论文完整详细总结" : "Complete Detailed Paper Summary",
+    ),
+  );
+  const reportTitle = state.currentPaper?.summary_paper_title || state.currentPaper?.title;
+  if (reportTitle) heading.append(make("p", "markdown-document-subtitle", reportTitle));
+  container.append(heading);
+
+  let bulletList = null;
+  for (const block of blocks) {
+    if (!block || !block.id) continue;
+    if (block.type !== "bullet") bulletList = null;
+    if (block.type === "heading") {
+      const level = Number(block.level) === 3 ? 3 : 2;
+      container.append(structuredBlockElement(block, language, `h${level}`));
+      continue;
+    }
+    if (block.type === "bullet") {
+      if (!bulletList) {
+        bulletList = make("ul", "structured-bullet-list");
+        container.append(bulletList);
+      }
+      bulletList.append(structuredBlockElement(block, language, "li"));
+      continue;
+    }
+    container.append(structuredBlockElement(block, language, "p"));
+  }
+}
+
+function structuredBlockElement(block, language, tagName) {
+  const node = make(tagName, `structured-block structured-${block.type}`);
+  const key = language === "zh" ? "text_zh" : "text_en";
+  const text = String(block[key] || "").trim();
+  node.dataset.blockId = block.id;
+  node.dataset.language = language;
+  node.tabIndex = 0;
+  if (text) {
+    const textNode = make("span", "structured-block-text");
+    appendSummaryText(textNode, text);
+    node.append(textNode);
+  } else {
+    node.classList.add("translation-pending");
+    node.append(make("span", "structured-block-text", "中文翻译生成中…"));
+  }
+  appendPageReferenceButtons(node, block.page_refs);
+  node.addEventListener("click", (event) => {
+    if (event.target.closest("[data-page-ref]")) return;
+    activateSummaryBlock(block.id, language);
+  });
+  node.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      activateSummaryBlock(block.id, language);
+    }
+  });
+  if (language === "en" && block.type !== "heading") {
+    node.addEventListener("dblclick", (event) => activateBlockTerm(block, event));
+  }
+  return node;
+}
+
+function appendPageReferenceButtons(container, pageRefs) {
+  if (!Array.isArray(pageRefs) || !pageRefs.length) return;
+  const references = make("span", "structured-page-references");
+  for (const page of pageRefs) {
+    const button = make("button", "structured-page-button", `p.${page}`);
+    button.type = "button";
+    button.dataset.pageRef = String(page);
+    button.title = `跳转到 PDF 第 ${page} 页`;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      goToPdfPage(page);
+    });
+    references.append(button);
+  }
+  container.append(references);
+}
+
+function activateSummaryBlock(blockId, sourceLanguage) {
+  state.activePair = blockId;
+  $$(".structured-block").forEach((block) => {
+    block.classList.toggle("active", block.dataset.blockId === blockId);
+  });
+  const targetLanguage = sourceLanguage === "en" ? "zh" : "en";
+  const source = $(`.structured-block[data-language="${sourceLanguage}"][data-block-id="${blockId}"]`);
+  const target = $(`.structured-block[data-language="${targetLanguage}"][data-block-id="${blockId}"]`);
+  const targetScroller = target?.closest(".summary-content");
+  if (source && target && targetScroller) {
+    const delta = target.getBoundingClientRect().top - source.getBoundingClientRect().top;
+    targetScroller.scrollTo({ top: targetScroller.scrollTop + delta, behavior: "smooth" });
+  }
+  const label = $("#termLinkLabel b");
+  label.textContent = "段落已对齐";
+}
+
+function activateBlockTerm(block, event) {
+  event.preventDefault();
+  const selection = window.getSelection();
+  const selected = selection?.toString().trim() || englishWordAtPoint(event);
+  const selectionRect = selection?.rangeCount
+    ? selection.getRangeAt(0).getBoundingClientRect()
+    : { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 };
+  activateSummaryBlock(block.id, "en");
+  const term = cleanSelectedEnglish(selected);
+  if (term) {
+    translateAndShowWord(
+      {
+        term_en: term,
+        translation_zh: "",
+        paper_id: state.currentPaper.id,
+        paper_title: state.currentPaper.title,
+        source_pair_index: null,
+        context_en: block.text_en || "",
+        context_zh: block.text_zh || "",
+      },
+      selectionRect,
+    );
+  }
+  selection?.removeAllRanges();
 }
 
 function renderMarkdownReport(container, pairs, language, visualAssets = [], paperId = "") {
@@ -1942,8 +2128,29 @@ function appendSummaryText(container, text) {
 
 function downloadSummaryMarkdown() {
   const paper = state.currentPaper;
-  if (!paper?.summary_pairs?.length) {
+  if (!paper?.summary_blocks?.length && !paper?.summary_pairs?.length) {
     toast("当前没有可导出的摘要", "error");
+    return;
+  }
+  if (paper.summary_blocks?.length) {
+    const lines = [
+      "# 论文完整详细总结",
+      "",
+      `> 论文：${paper.summary_paper_title || paper.title}`,
+      "",
+      ...summaryBlocksToMarkdown(paper.summary_blocks, "zh"),
+      "",
+      "---",
+      "",
+      "# Complete Detailed Paper Summary",
+      "",
+      ...summaryBlocksToMarkdown(paper.summary_blocks, "en"),
+    ];
+    downloadTextFile(
+      `${paper.title.replace(/[\\/:*?"<>|]+/g, "-").slice(0, 120)}-完整总结.md`,
+      `${lines.join("\n")}\n`,
+      "text/markdown;charset=utf-8",
+    );
     return;
   }
   const lines = ["# 论文完整详细总结", "", `> 论文：${paper.title}`, ""];
@@ -2197,6 +2404,11 @@ function showEditDialog() {
   form.elements.doi.value = paper.doi || "";
   form.elements.summary_en.value = (paper.summary_pairs || []).map((pair) => pair.en || "").join("\n");
   form.elements.summary_zh.value = (paper.summary_pairs || []).map((pair) => pair.zh || "").join("\n");
+  const legacyEditor = $("#legacySummaryEditor");
+  const usesBlocks = Boolean(paper.summary_blocks?.length);
+  legacyEditor.hidden = usesBlocks;
+  form.elements.summary_en.disabled = usesBlocks;
+  form.elements.summary_zh.disabled = usesBlocks;
   renderTagPickers();
   const selected = new Set(paper.tags.map((tag) => tag.id));
   $$("input", $("#editTagPicker")).forEach((input) => { input.checked = selected.has(input.value); });
@@ -2205,7 +2417,9 @@ function showEditDialog() {
 
 function updateProviderHint() {
   const remote = state.settings.provider === "openai_compatible";
-  $("#uploadProviderHint").textContent = remote ? `${state.settings.model || "OpenAI 兼容模型"}` : "本地结构索引（非机器翻译）";
+  $("#uploadProviderHint").textContent = remote
+    ? `${state.settings.analysis_model || state.settings.model || "OpenAI 兼容模型"}`
+    : "本地结构索引（非机器翻译）";
 }
 
 function showSettingsDialog() {
@@ -2297,22 +2511,23 @@ async function handleEdit(event) {
   const paper = state.currentPaper;
   if (!paper) return;
   const form = event.currentTarget;
-  const english = form.elements.summary_en.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const chinese = form.elements.summary_zh.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const count = Math.max(english.length, chinese.length);
-  const summaryPairs = Array.from({ length: count }, (_, index) => ({
-    ...(paper.summary_pairs[index] || {}),
-    en: english[index] || "",
-    zh: chinese[index] || "",
-  }));
   const payload = {
     title: form.elements.title.value,
     authors: form.elements.authors.value,
     publication_year: form.elements.publication_year.value,
     doi: form.elements.doi.value,
-    summary_pairs: summaryPairs,
     tag_ids: $$("#editTagPicker input:checked").map((input) => input.value),
   };
+  if (!paper.summary_blocks?.length) {
+    const english = form.elements.summary_en.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const chinese = form.elements.summary_zh.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const count = Math.max(english.length, chinese.length);
+    payload.summary_pairs = Array.from({ length: count }, (_, index) => ({
+      ...(paper.summary_pairs[index] || {}),
+      en: english[index] || "",
+      zh: chinese[index] || "",
+    }));
+  }
   try {
     const result = await api(`/api/papers/${paper.id}`, {
       method: "PUT",
@@ -2337,13 +2552,15 @@ async function regenerateSummary() {
     toast("详细双语摘要需要先配置 OpenAI 兼容模型", "error");
     return;
   }
-  setBusy(true, state.settings.provider === "openai_compatible" ? "模型正在生成详细双语摘要..." : "正在重建结构索引与图表...");
+  setBusy(true, "模型正在通读全文并撰写英文详细总结...");
   try {
     const result = await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
     state.currentPaper = result.paper;
     renderReader();
     await loadLibrary();
-    toast("双语摘要已更新");
+    setBusy(false);
+    toast("英文详细总结已完成，正在生成中文翻译");
+    await retrySummaryTranslation({ quietStart: true });
   } catch (error) {
     if (error.data?.paper) {
       state.currentPaper = error.data.paper;
@@ -2352,6 +2569,33 @@ async function regenerateSummary() {
     handleError(error);
   } finally {
     setBusy(false);
+  }
+}
+
+async function retrySummaryTranslation({ quietStart = false } = {}) {
+  const paper = state.currentPaper;
+  if (!paper?.summary_blocks?.length || paper.summary_status === "translating") return;
+  state.currentPaper = {
+    ...paper,
+    summary_status: "translating",
+    summary_translation_status: "translating",
+    summary_translation_error: "",
+  };
+  renderReader();
+  if (!quietStart) toast("正在重新生成中文翻译");
+  try {
+    const result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
+    state.currentPaper = result.paper;
+    renderReader();
+    await loadLibrary();
+    toast("中文翻译已完成");
+  } catch (error) {
+    if (error.data?.paper) {
+      state.currentPaper = error.data.paper;
+      renderReader();
+      await loadLibrary().catch(() => {});
+    }
+    handleError(error);
   }
 }
 
@@ -2597,6 +2841,7 @@ function bindEvents() {
   });
   $("#qaForm").addEventListener("submit", handleQaSubmit);
   $("#downloadMarkdownButton").addEventListener("click", downloadSummaryMarkdown);
+  $("#translateSummaryButton").addEventListener("click", () => retrySummaryTranslation());
   $("#deletePaperButton").addEventListener("click", deleteCurrentPaper);
   $("#pdfPreviousPage").addEventListener("click", () => goToPdfPage(state.pdfCurrentPage - 1));
   $("#pdfNextPage").addEventListener("click", () => goToPdfPage(state.pdfCurrentPage + 1));

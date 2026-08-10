@@ -146,7 +146,7 @@ def openai_compatible(title: str, text: str, settings: dict[str, str]) -> list[d
             },
         ],
     }
-    _apply_provider_controls(payload, settings)
+    _apply_provider_controls(payload, settings, task="analysis")
     return _parse_pairs(_request_chat_completion(payload, settings, timeout=240))
 
 
@@ -165,7 +165,7 @@ def translate_english(text: str, context: str, settings: dict[str, str]) -> dict
             },
         ],
     }
-    _apply_provider_controls(payload, settings)
+    _apply_provider_controls(payload, settings, task="translation")
     content = _request_chat_completion(payload, settings, timeout=90).strip()
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.I)
@@ -200,8 +200,7 @@ def request_structured_json(
             {"role": "user", "content": user_prompt},
         ],
     }
-    _apply_provider_controls(payload, settings)
-    content, usage = _request_chat_completion_result(payload, settings, timeout)
+    content, usage = _request_chat_completion_result_with_controls(payload, settings, timeout, "structured")
     cleaned = content.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.I)
@@ -218,12 +217,44 @@ def request_structured_json(
     return result, max(0, token_count)
 
 
-def _apply_provider_controls(payload: dict[str, Any], settings: dict[str, str]) -> None:
+def request_chat_completion(
+    payload: dict[str, Any],
+    settings: dict[str, str],
+    *,
+    timeout: int,
+    task: str = "structured",
+) -> dict[str, Any]:
+    _apply_provider_controls(payload, settings, task=task)
+    return _request_chat_completion_details(payload, settings, timeout)
+
+
+def _apply_provider_controls(
+    payload: dict[str, Any], settings: dict[str, str], task: str = "structured"
+) -> None:
     base_url = settings.get("base_url", "")
     hostname = (urllib.parse.urlparse(base_url).hostname or "").casefold()
-    model = settings.get("model", "").casefold()
+    model = str(payload.get("model") or settings.get("model", "")).casefold()
     if hostname == "api.deepseek.com" and model.startswith("deepseek-v4"):
-        payload["thinking"] = {"type": "disabled"}
+        if task == "analysis":
+            effort = str(settings.get("analysis_reasoning_effort", "high")).casefold()
+            if effort not in {"high", "max"}:
+                effort = "high"
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = effort
+            payload.pop("temperature", None)
+        else:
+            payload["thinking"] = {"type": "disabled"}
+            payload.pop("reasoning_effort", None)
+
+
+def _request_chat_completion_result_with_controls(
+    payload: dict[str, Any],
+    settings: dict[str, str],
+    timeout: int,
+    task: str,
+) -> tuple[str, dict[str, Any]]:
+    result = request_chat_completion(payload, settings, timeout=timeout, task=task)
+    return str(result["content"]), dict(result.get("usage", {}))
 
 
 def _request_chat_completion(
@@ -236,6 +267,13 @@ def _request_chat_completion(
 def _request_chat_completion_result(
     payload: dict[str, Any], settings: dict[str, str], timeout: int
 ) -> tuple[str, dict[str, Any]]:
+    result = _request_chat_completion_details(payload, settings, timeout)
+    return str(result["content"]), dict(result.get("usage", {}))
+
+
+def _request_chat_completion_details(
+    payload: dict[str, Any], settings: dict[str, str], timeout: int
+) -> dict[str, Any]:
     api_key = os.environ.get("PAPER_VAULT_API_KEY") or settings.get("api_key", "")
     base_url = settings.get("base_url", "https://api.openai.com/v1").rstrip("/")
     endpoint = f"{base_url}/chat/completions"
@@ -267,7 +305,11 @@ def _request_chat_completion_result(
     if not content:
         raise SummaryError("LLM response contained empty chat completion content")
     usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
-    return str(content), usage
+    return {
+        "content": str(content),
+        "usage": usage,
+        "finish_reason": choice.get("finish_reason"),
+    }
 
 
 def _parse_pairs(content: str) -> list[dict[str, Any]]:

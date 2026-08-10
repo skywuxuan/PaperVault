@@ -33,6 +33,13 @@ from .analysis import (
     provider_available,
 )
 from .database import Database, utc_now
+from .deep_summary import (
+    DEEP_SUMMARY_PROMPT_VERSION,
+    analysis_model,
+    generate_english_report,
+    translate_report_blocks,
+    translation_model,
+)
 from .llm import SummaryError, generate_summary, translate_english
 from .offline_translation import OfflineTranslationError, translate_english_offline
 from .pronunciation import american_ipa
@@ -57,6 +64,7 @@ PAPER_ASSET_RE = re.compile(
 PAPER_PAGE_IMAGE_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)\.png$")
 PAPER_PAGE_TEXT_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)/text$")
 PAPER_SUMMARY_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/generate-summary$")
+PAPER_SUMMARY_TRANSLATION_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/translate-summary$")
 PAPER_ANALYSES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/analyses$")
 PAPER_ANALYSIS_CREATE_RE = re.compile(
     r"^/api/papers/([0-9a-f-]+)/analyses/(quick-read|figure-analysis)$"
@@ -475,6 +483,10 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         if match:
             self.generate_paper_summary(match.group(1))
             return
+        match = PAPER_SUMMARY_TRANSLATION_RE.match(path)
+        if match:
+            self.translate_paper_summary(match.group(1))
+            return
         if path == "/api/tags":
             self.create_tag()
             return
@@ -734,13 +746,12 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         summary_provider = ""
         summary_model = ""
         summary_error = ""
-        if fields.get("generate_summary", "1") != "0":
+        generate_requested = fields.get("generate_summary", "1") != "0"
+        settings = self.server.db.get_settings(include_secret=True)
+        if generate_requested and settings.get("provider") == "local":
             try:
-                settings = self.server.db.get_settings(include_secret=True)
                 summary_pairs, summary_provider = generate_summary(title, parsed["text"], settings)
-                if summary_provider == "openai_compatible":
-                    summary_model = settings.get("model", "")
-                summary_status = "draft" if summary_provider == "local" else "ready"
+                summary_status = "draft"
             except SummaryError as exc:
                 summary_status = "error"
                 summary_error, _ = friendly_model_error(str(exc))
@@ -756,6 +767,13 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             "page_count": parsed["page_count"],
             "extracted_text": parsed["text"],
             "summary_pairs": summary_pairs,
+            "summary_blocks": [],
+            "summary_paper_title": "",
+            "summary_translation_status": "none",
+            "summary_translation_error": "",
+            "summary_analysis_model": "",
+            "summary_translation_model": "",
+            "summary_prompt_version": "",
             "visual_assets": [],
             "summary_status": summary_status,
             "summary_provider": summary_provider,
@@ -772,6 +790,35 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid paper data: {exc}")
             return
         result = self.server.ensure_visual_assets(paper_id) or result
+        if generate_requested and settings.get("provider") == "openai_compatible":
+            self.server.db.update_paper(
+                paper_id,
+                {"summary_status": "generating", "summary_error": ""},
+                None,
+            )
+            try:
+                result = self._generate_english_summary(paper_id, settings)
+            except SummaryError as exc:
+                message, _ = friendly_model_error(str(exc))
+                result = self.server.db.update_paper(
+                    paper_id,
+                    {"summary_status": "error", "summary_error": message},
+                    None,
+                )
+            else:
+                try:
+                    result = self._translate_summary_blocks(paper_id, settings)
+                except SummaryError as exc:
+                    message, _ = friendly_model_error(str(exc))
+                    result = self.server.db.update_paper(
+                        paper_id,
+                        {
+                            "summary_status": "translation_error",
+                            "summary_translation_status": "error",
+                            "summary_translation_error": message,
+                        },
+                        None,
+                    )
         result, deduplicated_count = self.server.consolidate_paper_duplicates(paper_id)
         self.send_json(
             {"paper": result, "deduplicated_count": deduplicated_count},
@@ -938,26 +985,23 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         if paper is None:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
-        self.server.ensure_visual_assets(paper_id)
-        self.server.db.update_paper(paper_id, {"summary_status": "generating", "summary_error": ""}, None)
         settings = self.server.db.get_settings(include_secret=True)
-        try:
-            pairs, provider = generate_summary(
-                paper["title"], paper.get("extracted_text", ""),
-                settings,
+        if settings.get("provider") != "openai_compatible":
+            self.send_error_json(
+                HTTPStatus.CONFLICT,
+                "Detailed paper analysis requires an OpenAI-compatible model",
             )
+            return
+        self.server.db.update_paper(
+            paper_id,
+            {"summary_status": "generating", "summary_error": ""},
+            None,
+        )
+        try:
+            updated = self._generate_english_summary(paper_id, settings)
         except SummaryError as exc:
             message, error_code = friendly_model_error(str(exc))
-            previous_status = str(paper.get("summary_status", "pending"))
-            if previous_status in {"generating", "error"}:
-                if paper.get("summary_pairs"):
-                    previous_status = (
-                        "ready"
-                        if paper.get("summary_provider") == "openai_compatible"
-                        else "edited"
-                    )
-                else:
-                    previous_status = "error"
+            previous_status = self._restored_summary_status(paper)
             updated = self.server.db.update_paper(
                 paper_id,
                 {"summary_status": previous_status, "summary_error": message},
@@ -968,19 +1012,129 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 HTTPStatus.BAD_GATEWAY,
             )
             return
-        status = "draft" if provider == "local" else "ready"
+        self.send_json({"paper": updated, "phase": "english_complete"})
+
+    def translate_paper_summary(self, paper_id: str) -> None:
+        paper = self.server.db.get_paper(paper_id)
+        if paper is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        if not paper.get("summary_blocks"):
+            self.send_error_json(
+                HTTPStatus.CONFLICT,
+                "Generate the English report before translating it",
+            )
+            return
+        settings = self.server.db.get_settings(include_secret=True)
+        self.server.db.update_paper(
+            paper_id,
+            {
+                "summary_status": "translating",
+                "summary_translation_status": "translating",
+                "summary_translation_error": "",
+            },
+            None,
+        )
+        try:
+            updated = self._translate_summary_blocks(paper_id, settings)
+        except SummaryError as exc:
+            message, error_code = friendly_model_error(str(exc))
+            updated = self.server.db.update_paper(
+                paper_id,
+                {
+                    "summary_status": "translation_error",
+                    "summary_translation_status": "error",
+                    "summary_translation_error": message,
+                },
+                None,
+            )
+            self.send_json(
+                {"paper": updated, "error": message, "error_code": error_code},
+                HTTPStatus.BAD_GATEWAY,
+            )
+            return
+        self.send_json({"paper": updated})
+
+    def _generate_english_summary(
+        self, paper_id: str, settings: dict[str, str]
+    ) -> dict[str, Any]:
+        paper = self.server.db.get_paper(paper_id, include_text=True)
+        if paper is None:
+            raise SummaryError("Paper is unavailable")
+        page_texts = self._summary_page_texts(paper)
+        report, metadata = generate_english_report(paper["title"], page_texts, settings)
+        blocks = [
+            {key: value for key, value in block.items() if key != "text_zh"}
+            for block in report["blocks"]
+        ]
         updated = self.server.db.update_paper(
             paper_id,
             {
-                "summary_pairs": pairs,
-                "summary_status": status,
-                "summary_provider": provider,
-                "summary_model": settings.get("model", "") if provider == "openai_compatible" else "",
+                "summary_blocks": blocks,
+                "summary_paper_title": report["paper_title"],
+                "summary_status": "english_ready",
+                "summary_provider": "openai_compatible",
+                "summary_model": metadata["model"],
+                "summary_analysis_model": metadata["model"],
+                "summary_translation_model": translation_model(settings),
+                "summary_prompt_version": DEEP_SUMMARY_PROMPT_VERSION,
+                "summary_translation_status": "pending",
+                "summary_translation_error": "",
                 "summary_error": "",
             },
             None,
         )
-        self.send_json({"paper": updated})
+        if updated is None:
+            raise SummaryError("Paper became unavailable while saving the English report")
+        return updated
+
+    def _translate_summary_blocks(
+        self, paper_id: str, settings: dict[str, str]
+    ) -> dict[str, Any]:
+        paper = self.server.db.get_paper(paper_id)
+        if paper is None:
+            raise SummaryError("Paper is unavailable")
+        english_blocks = [
+            {key: value for key, value in block.items() if key != "text_zh"}
+            for block in paper.get("summary_blocks", [])
+            if isinstance(block, dict)
+        ]
+        merged, metadata = translate_report_blocks(english_blocks, settings)
+        updated = self.server.db.update_paper(
+            paper_id,
+            {
+                "summary_blocks": merged,
+                "summary_status": "ready",
+                "summary_translation_status": "ready",
+                "summary_translation_error": "",
+                "summary_translation_model": metadata["model"],
+            },
+            None,
+        )
+        if updated is None:
+            raise SummaryError("Paper became unavailable while saving the translation")
+        return updated
+
+    def _summary_page_texts(self, paper: dict[str, Any]) -> list[dict[str, Any]]:
+        pdf_path = self.server.upload_dir / str(paper.get("stored_filename", ""))
+        try:
+            return extract_page_texts(pdf_path)
+        except Exception:
+            fallback = str(paper.get("extracted_text", "")).strip()
+            return [{"page": 1, "text": fallback}] if fallback else []
+
+    @staticmethod
+    def _restored_summary_status(paper: dict[str, Any]) -> str:
+        blocks = paper.get("summary_blocks", [])
+        if blocks:
+            if all(str(block.get("text_zh", "")).strip() for block in blocks):
+                return "ready"
+            if paper.get("summary_translation_status") == "error":
+                return "translation_error"
+            return "english_ready"
+        if paper.get("summary_pairs"):
+            return "ready" if paper.get("summary_provider") == "openai_compatible" else "edited"
+        return "error"
 
     def serve_paper_asset(self, paper_id: str, filename: str) -> None:
         paper = self.server.ensure_visual_assets(paper_id)
@@ -1084,6 +1238,23 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         if provider is not None and provider not in {"local", "openai_compatible"}:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid LLM provider")
             return
+        effort = payload.get("analysis_reasoning_effort")
+        if effort is not None and effort not in {"high", "max"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid analysis reasoning effort")
+            return
+        context_tokens = str(payload.get("context_window_tokens", "")).strip()
+        if context_tokens:
+            try:
+                parsed_context = int(context_tokens)
+            except ValueError:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid model context length")
+                return
+            if parsed_context < 16000 or parsed_context > 2_000_000:
+                self.send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "Model context length must be between 16000 and 2000000 tokens",
+                )
+                return
         self.send_json({"settings": self.server.db.update_settings(payload)})
 
     def create_vocabulary_entry(self) -> None:
@@ -1417,9 +1588,9 @@ def normalize_paper_title(value: Any) -> str:
 
 
 def paper_quality_key(paper: dict[str, Any]) -> tuple[int, str, str]:
-    has_summary = bool(paper.get("summary_pairs")) and paper.get("summary_status") in {
-        "ready", "draft", "edited"
-    }
+    has_summary = bool(paper.get("summary_blocks") or paper.get("summary_pairs")) and paper.get(
+        "summary_status"
+    ) in {"ready", "draft", "edited", "english_ready", "translating", "translation_error"}
     return (
         int(has_summary),
         str(paper.get("updated_at", "")),
