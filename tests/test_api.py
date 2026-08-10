@@ -13,11 +13,25 @@ from pathlib import Path
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from backend.app import PaperVaultServer
+from backend.app import PaperVaultServer, friendly_model_error
 from backend.llm import SummaryError
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+
+
+class FriendlyModelErrorTestCase(unittest.TestCase):
+    def test_translation_validation_errors_have_safe_specific_codes(self) -> None:
+        numeric_message, numeric_code = friendly_model_error(
+            'Translation changed numeric content for block paragraph-001'
+        )
+        structure_message, structure_code = friendly_model_error(
+            'Translation block IDs or order did not match the English report'
+        )
+        self.assertEqual(numeric_code, "translation_numeric_mismatch")
+        self.assertEqual(structure_code, "translation_structure_error")
+        self.assertIn("英文报告已保留", numeric_message)
+        self.assertIn("英文报告已保留", structure_message)
 
 
 class ApiTestCase(unittest.TestCase):

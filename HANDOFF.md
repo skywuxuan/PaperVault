@@ -1,6 +1,6 @@
 # PaperVault Development Handoff
 
-Updated: 2026-08-10 (Asia/Shanghai)
+Updated: 2026-08-11 (Asia/Shanghai)
 
 ## 1. Start Here
 
@@ -135,19 +135,29 @@ stores or displays `reasoning_content`. It does not silently change flash to pro
 
 ## 5. Current Library State
 
-The previous handoff described 4 papers. A read-only check on 2026-08-10 found
-9 distinct physical paper records in the active database, each with 49–60
-existing bilingual deep-read pairs. Treat 9 as the current observed baseline;
-do not delete or consolidate records to force the old count. The source database
-was opened with SQLite `mode=ro&immutable=1` only. Its schema remained at
-`user_version = 0`, with no `read_state` or `deleted_at` columns, after the
-compatibility check.
+The active library contains 9 distinct physical paper records. Before the 2.1.0
+structured-summary migration and user-requested regeneration, the stopped SQLite
+database was copied to:
 
-An exact schema-only clone, containing no settings, credentials, paper rows, or
-PDF content, migrated successfully to schema version 3 and added analysis jobs,
-analysis runs, page chunks, read state, recycle-bin fields, and structured deep-summary
-columns. Automated tests
-must continue to use temporary data directories.
+```text
+C:\Users\skywu\Documents\Codex\PaperVault\data\backups\paper-vault-before-2.1.0-summary-regeneration-20260810-2139.db
+```
+
+That backup is 1,101,824 bytes and was verified byte-identical to the source at
+backup time. It is local data and is not tracked by Git.
+
+On 2026-08-11 all 9 papers were regenerated through the English-first structured
+flow requested by the user. Every paper now uses prompt version
+`deep-summary-blocks-v1`, has `summary_status = ready` and
+`summary_translation_status = ready`, and contains complete Chinese text for every
+block. Per-paper block counts are `39, 34, 47, 56, 35, 40, 36, 40, 34` (361 total).
+Aggregate validation found unique IDs and valid PDF page references for all blocks.
+Original PDFs and non-summary paper metadata were not rewritten by regeneration.
+
+The active database is schema version 3 with analysis jobs/runs, page chunks, read
+state, recycle-bin fields, and structured deep-summary columns. Legacy
+`summary_pairs` remains a supported read path for older databases and tests.
+Automated tests must continue to use temporary data directories.
 
 ## 6. Implemented Features
 
@@ -173,6 +183,8 @@ must continue to use temporary data directories.
 - English output is an unrestricted ordered `summary_blocks` document with level-2 sections, paper-specific level-3 modules, coherent paragraphs, true parallel bullets, and validated page references.
 - English blocks are saved immediately with status `english_ready`; translation is a second call containing only block id/type/English text and is merged strictly by stable id.
 - Translation failure leaves the English report visible as `translation_error`; `POST /translate-summary` retries Chinese only and never reruns English analysis.
+- Translation validation requires identical numeric token values and multiplicities while allowing complete clauses to move into natural Chinese order. Targeted retries protect numbers with stable labels, restore each label to its own original value, and can fall back to sentence or nonnumeric text-span translation without guessing numbers.
+- Chinese characters adjacent to Arabic numbers are handled correctly; safe API error codes distinguish numeric, ID/order, invalid-JSON, and truncated-output failures without exposing paper content.
 - Truncated English output is continued after the last complete block and merged; incomplete JSON is never accepted. JSON repair runs with thinking disabled.
 - Reader rendering is an unframed long document. Consecutive bullets form one list, page buttons jump to PDF, and clicking either language block aligns its counterpart to the same viewport height.
 - Markdown/JSON exports support `summary_blocks`; legacy `summary_pairs` remains readable and retains the previous sentence-pair view.
@@ -264,7 +276,8 @@ backend/analysis.py
 
 backend/deep_summary.py
   Page-labelled input cleanup/budgeting/chunking, ordered English report blocks,
-  truncation continuation, strict translation alignment, and JSON validation.
+  truncation continuation, strict translation alignment, numeric preservation,
+  targeted translation fallback, and JSON validation.
 
 backend/llm.py
   OpenAI-compatible transport, task-specific DeepSeek thinking controls,
@@ -297,7 +310,8 @@ tests/test_api.py
 
 tests/test_deep_summary.py
   Full input beyond 60,000 characters, page-labelled chunking, block validation,
-  truncated output continuation, translation id/number checks, and request safety.
+  truncated output continuation, translation id/number checks, natural numeric
+  clause reordering, protected retries, text-span fallback, and request safety.
 
 tests/test_analysis.py
   Legacy-schema migration, restart recovery, chunk retrieval, analysis
@@ -387,7 +401,7 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-44 tests passed
+52 tests passed
 JavaScript syntax check passed
 Windows PyInstaller `onedir` build passed
 Packaged EXE health check returned version 2.1.0 using a temporary data directory

@@ -100,10 +100,13 @@ REFERENCE_ENTRY_RE = re.compile(
 )
 APPENDIX_HEADING_RE = re.compile(r"^(?:appendix|supplementary material)\b", re.I)
 NUMERIC_TOKEN_RE = re.compile(
-    r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:e[+-]?\d+)?(?:%|[kKMB])?",
+    r"(?<![A-Za-z0-9_.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:e[+-]?\d+)?(?:%|[kKMB])?",
     re.I,
 )
 BLOCK_ID_RE = re.compile(r"^(heading|paragraph|bullet)-\d{3,}$")
+NUMERIC_PLACEHOLDER_RE = re.compile(
+    r"(?:__|\[\[|<)?PVNUM[_\s-]?([A-Z]+)(?:__|\]\]|/?>)?", re.I
+)
 
 
 def estimate_tokens(text: str) -> int:
@@ -317,18 +320,21 @@ def translate_report_blocks(
             validation_error = "The previous translation was truncated. Return every requested block."
             continue
         try:
-            translations = _parse_translations(result["content"], blocks)
+            translations, correction_usage = _accept_translation_candidate(
+                result["content"], blocks, settings, model
+            )
+            usage_total += correction_usage
             break
         except SummaryError as exc:
             validation_error = str(exc)
     if translations is None:
         translations = []
         for chunk in _translation_chunks(blocks):
-            chunk_result = _request_translation(chunk, settings, model, validation_error)
-            usage_total += _usage_tokens(chunk_result.get("usage", {}))
-            if _is_truncated(chunk_result.get("finish_reason")):
-                raise SummaryError("Chinese translation was truncated after block-level retry")
-            translations.extend(_parse_translations(chunk_result["content"], chunk))
+            chunk_translations, chunk_usage = _translate_chunk_resilient(
+                chunk, settings, model, validation_error
+            )
+            usage_total += chunk_usage
+            translations.extend(chunk_translations)
 
     by_id = {item["id"]: item["text_zh"] for item in translations}
     merged = [{**block, "text_zh": by_id[block["id"]]} for block in blocks]
@@ -520,9 +526,13 @@ def _parse_json_object(content: str) -> dict[str, Any]:
     return data
 
 
-def _parse_translations(content: str, blocks: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _parse_translation_candidate(
+    content: str, blocks: list[dict[str, Any]]
+) -> list[dict[str, str]]:
     data = _parse_json_object(content)
-    raw = data.get("translations", [])
+    raw = data.get("translations")
+    if not isinstance(raw, list) and isinstance(data.get("blocks"), list):
+        raw = data["blocks"]
     if not isinstance(raw, list):
         raise SummaryError("Translation response did not contain a translations array")
     expected_ids = [block["id"] for block in blocks]
@@ -534,17 +544,287 @@ def _parse_translations(content: str, blocks: list[dict[str, Any]]) -> list[dict
         text_zh = str(item.get("text_zh", "")).strip()
         if not text_zh:
             raise SummaryError(f"Translation was empty for block {block['id']}")
-        if NUMERIC_TOKEN_RE.findall(block["text_en"]) != NUMERIC_TOKEN_RE.findall(text_zh):
-            raise SummaryError(f"Translation changed numeric content for block {block['id']}")
         translations.append({"id": block["id"], "text_zh": text_zh})
     return translations
+
+
+def _numeric_mismatch_details(
+    translations: list[dict[str, str]], blocks: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    for block, translation in zip(blocks, translations, strict=True):
+        expected = NUMERIC_TOKEN_RE.findall(block["text_en"])
+        actual = NUMERIC_TOKEN_RE.findall(translation["text_zh"])
+        if Counter(expected) != Counter(actual):
+            details.append({"id": block["id"], "expected": expected, "actual": actual})
+    return details
+
+
+def _numeric_validation_feedback(mismatches: list[dict[str, Any]]) -> str:
+    return (
+        "Translation changed numeric content. Retranslate only the supplied blocks and "
+        "preserve each expected numeric token exactly once, in this exact order: "
+        + json.dumps(mismatches, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def _validate_translation_numbers(
+    translations: list[dict[str, str]], blocks: list[dict[str, Any]]
+) -> None:
+    mismatches = _numeric_mismatch_details(translations, blocks)
+    if mismatches:
+        raise SummaryError(_numeric_validation_feedback(mismatches))
+
+
+def _accept_translation_candidate(
+    content: str,
+    blocks: list[dict[str, Any]],
+    settings: dict[str, str],
+    model: str,
+) -> tuple[list[dict[str, str]], int]:
+    candidate = _parse_translation_candidate(content, blocks)
+    mismatches = _numeric_mismatch_details(candidate, blocks)
+    if not mismatches:
+        return candidate, 0
+    mismatch_ids = {item["id"] for item in mismatches}
+    correction_blocks = [block for block in blocks if block["id"] in mismatch_ids]
+    corrected, usage = _translate_numeric_corrections(correction_blocks, settings, model)
+    corrected_by_id = {item["id"]: item for item in corrected}
+    merged = [corrected_by_id.get(item["id"], item) for item in candidate]
+    _validate_translation_numbers(merged, blocks)
+    return merged, usage
+
+
+def _placeholder_label(index: int) -> str:
+    label = ""
+    value = index + 1
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        label = chr(ord("A") + remainder) + label
+    return label
+
+
+def _protect_numeric_tokens(
+    blocks: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, list[tuple[str, str]]]]:
+    protected: list[dict[str, Any]] = []
+    replacements: dict[str, list[tuple[str, str]]] = {}
+    for block in blocks:
+        block_replacements: list[tuple[str, str]] = []
+
+        def replace(match: re.Match[str]) -> str:
+            placeholder = f"[[PVNUM_{_placeholder_label(len(block_replacements))}]]"
+            block_replacements.append((placeholder, match.group(0)))
+            return placeholder
+
+        protected.append({**block, "text_en": NUMERIC_TOKEN_RE.sub(replace, block["text_en"])})
+        replacements[block["id"]] = block_replacements
+    return protected, replacements
+
+
+def _restore_numeric_placeholders(
+    translations: list[dict[str, str]],
+    replacements: dict[str, list[tuple[str, str]]],
+) -> list[dict[str, str]]:
+    restored: list[dict[str, str]] = []
+    for translation in translations:
+        block_id = translation["id"]
+        expected = [
+            _placeholder_label(index) for index, _ in enumerate(replacements[block_id])
+        ]
+        matches = list(NUMERIC_PLACEHOLDER_RE.finditer(translation["text_zh"]))
+        actual = [match.group(1).upper() for match in matches]
+        if Counter(actual) != Counter(expected):
+            raise SummaryError(
+                "Translation changed numeric content because it did not preserve numeric "
+                f"placeholders for block {block_id}"
+            )
+        text_parts: list[str] = []
+        cursor = 0
+        numeric_by_label = {
+            _placeholder_label(index): numeric_token
+            for index, (_, numeric_token) in enumerate(replacements[block_id])
+        }
+        for match in matches:
+            numeric_token = numeric_by_label[match.group(1).upper()]
+            text_parts.extend((translation["text_zh"][cursor : match.start()], numeric_token))
+            cursor = match.end()
+        text_parts.append(translation["text_zh"][cursor:])
+        text_zh = "".join(text_parts)
+        restored.append({"id": block_id, "text_zh": text_zh})
+    return restored
+
+
+def _translate_numeric_corrections(
+    blocks: list[dict[str, Any]],
+    settings: dict[str, str],
+    model: str,
+    previous_error: str = "",
+) -> tuple[list[dict[str, str]], int]:
+    protected, replacements = _protect_numeric_tokens(blocks)
+    instruction = (
+        "The supplied English text replaces every original numeric token with an ASCII "
+        "placeholder such as [[PVNUM_A]]. Copy every placeholder exactly once without "
+        "changing its label. A placeholder may move with its translated clause when Chinese "
+        "word order requires it. Do not remove, duplicate, or alter any placeholder."
+    )
+    validation_error = f"{previous_error} {instruction}".strip()
+    usage_total = 0
+    for _ in range(2):
+        result = _request_translation(protected, settings, model, validation_error)
+        usage_total += _usage_tokens(result.get("usage", {}))
+        if _is_truncated(result.get("finish_reason")):
+            validation_error = f"The previous response was truncated. {instruction}"
+            continue
+        try:
+            candidate = _parse_translation_candidate(result["content"], protected)
+            restored = _restore_numeric_placeholders(candidate, replacements)
+            _validate_translation_numbers(restored, blocks)
+            return restored, usage_total
+        except SummaryError as exc:
+            validation_error = f"{exc}. {instruction}"
+    if len(blocks) == 1:
+        segments = _split_translation_block(blocks[0])
+        if len(segments) > 1:
+            segment_translations, segment_usage = _translate_numeric_corrections(
+                segments, settings, model, validation_error
+            )
+            combined = " ".join(item["text_zh"] for item in segment_translations)
+            restored = [{"id": blocks[0]["id"], "text_zh": combined}]
+            _validate_translation_numbers(restored, blocks)
+            return restored, usage_total + segment_usage
+        restored, span_usage = _translate_numeric_spans(
+            blocks[0], settings, model, validation_error
+        )
+        return [restored], usage_total + span_usage
+    midpoint = len(blocks) // 2
+    left, left_usage = _translate_numeric_corrections(
+        blocks[:midpoint], settings, model, validation_error
+    )
+    right, right_usage = _translate_numeric_corrections(
+        blocks[midpoint:], settings, model, validation_error
+    )
+    return left + right, usage_total + left_usage + right_usage
+
+
+def _split_translation_block(block: dict[str, Any]) -> list[dict[str, Any]]:
+    text = str(block.get("text_en", "")).strip()
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?;,:])\s+(?=[A-Z0-9(])|\n+", text)
+        if part.strip()
+    ]
+    if len(parts) <= 1:
+        return [block]
+    return [
+        {
+            **block,
+            "id": f"{block['id']}-part-{_placeholder_label(index)}",
+            "text_en": part,
+        }
+        for index, part in enumerate(parts)
+    ]
+
+
+def _translate_numeric_spans(
+    block: dict[str, Any],
+    settings: dict[str, str],
+    model: str,
+    previous_error: str,
+) -> tuple[dict[str, str], int]:
+    text = str(block["text_en"])
+    parts: list[tuple[str, str]] = []
+    span_blocks: list[dict[str, Any]] = []
+    cursor = 0
+    for match in NUMERIC_TOKEN_RE.finditer(text):
+        cursor = _append_translation_span(
+            block, text, cursor, match.start(), parts, span_blocks
+        )
+        parts.append(("numeric", match.group(0)))
+        cursor = match.end()
+    _append_translation_span(block, text, cursor, len(text), parts, span_blocks)
+    if not span_blocks:
+        raise SummaryError(previous_error or "Chinese translation failed numeric validation")
+    translated_spans, usage = _translate_text_spans_resilient(
+        span_blocks, settings, model, previous_error
+    )
+    translated_by_id = {item["id"]: item["text_zh"] for item in translated_spans}
+    combined = "".join(
+        translated_by_id[value] if kind == "translated" else value
+        for kind, value in parts
+    ).strip()
+    restored = {"id": block["id"], "text_zh": combined}
+    _validate_translation_numbers([restored], [block])
+    return restored, usage
+
+
+def _append_translation_span(
+    block: dict[str, Any],
+    text: str,
+    start: int,
+    end: int,
+    parts: list[tuple[str, str]],
+    span_blocks: list[dict[str, Any]],
+) -> int:
+    value = text[start:end]
+    if not value:
+        return end
+    if not re.search(r"[A-Za-z]", value):
+        parts.append(("literal", value))
+        return end
+    span_id = f"{block['id']}-span-{_placeholder_label(len(span_blocks))}"
+    span_blocks.append({**block, "id": span_id, "text_en": value.strip()})
+    parts.append(("translated", span_id))
+    return end
+
+
+def _translate_text_spans_resilient(
+    blocks: list[dict[str, Any]],
+    settings: dict[str, str],
+    model: str,
+    previous_error: str,
+) -> tuple[list[dict[str, str]], int]:
+    instruction = (
+        "Translate each supplied text fragment literally and preserve every fragment ID. "
+        "The original numeric tokens are intentionally absent and will be restored by the "
+        "backend. Do not introduce any Arabic digit into a translated fragment."
+    )
+    validation_error = f"{previous_error} {instruction}".strip()
+    usage_total = 0
+    for _ in range(2):
+        result = _request_translation(blocks, settings, model, validation_error)
+        usage_total += _usage_tokens(result.get("usage", {}))
+        if _is_truncated(result.get("finish_reason")):
+            validation_error = f"The previous response was truncated. {instruction}"
+            continue
+        try:
+            translations = _parse_translation_candidate(result["content"], blocks)
+            for translation in translations:
+                if NUMERIC_TOKEN_RE.search(translation["text_zh"]):
+                    raise SummaryError(
+                        "Translation changed numeric content by adding a digit to text span "
+                        f"{translation['id']}"
+                    )
+            return translations, usage_total
+        except SummaryError as exc:
+            validation_error = f"{exc}. {instruction}"
+    if len(blocks) == 1:
+        raise SummaryError(validation_error or "Chinese text span translation failed")
+    midpoint = len(blocks) // 2
+    left, left_usage = _translate_text_spans_resilient(
+        blocks[:midpoint], settings, model, validation_error
+    )
+    right, right_usage = _translate_text_spans_resilient(
+        blocks[midpoint:], settings, model, validation_error
+    )
+    return left + right, usage_total + left_usage + right_usage
 
 
 def _translation_chunks(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     chunks: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
     current_tokens = 0
-    limit = 10000
+    limit = 3000
     for block in blocks:
         block_tokens = estimate_tokens(block["text_en"]) + 20
         if current and current_tokens + block_tokens > limit:
@@ -556,6 +836,39 @@ def _translation_chunks(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any
     if current:
         chunks.append(current)
     return chunks
+
+
+def _translate_chunk_resilient(
+    blocks: list[dict[str, Any]],
+    settings: dict[str, str],
+    model: str,
+    previous_error: str,
+) -> tuple[list[dict[str, str]], int]:
+    usage_total = 0
+    validation_error = previous_error
+    for _ in range(2):
+        result = _request_translation(blocks, settings, model, validation_error)
+        usage_total += _usage_tokens(result.get("usage", {}))
+        if _is_truncated(result.get("finish_reason")):
+            validation_error = "The previous translation was truncated. Return every requested block."
+            continue
+        try:
+            translations, correction_usage = _accept_translation_candidate(
+                result["content"], blocks, settings, model
+            )
+            return translations, usage_total + correction_usage
+        except SummaryError as exc:
+            validation_error = str(exc)
+    if len(blocks) == 1:
+        raise SummaryError(validation_error or "Chinese translation failed block validation")
+    midpoint = len(blocks) // 2
+    left, left_usage = _translate_chunk_resilient(
+        blocks[:midpoint], settings, model, validation_error
+    )
+    right, right_usage = _translate_chunk_resilient(
+        blocks[midpoint:], settings, model, validation_error
+    )
+    return left + right, usage_total + left_usage + right_usage
 
 
 def _blocks_as_page_evidence(blocks: list[dict[str, Any]]) -> str:

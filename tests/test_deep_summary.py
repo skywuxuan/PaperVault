@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from backend.deep_summary import (
+    NUMERIC_TOKEN_RE,
     build_summary_input_plan,
     generate_english_report,
     normalize_report,
@@ -148,6 +149,39 @@ class DeepSummaryTranslationTestCase(unittest.TestCase):
             },
         ]
 
+    def test_numeric_tokens_are_detected_next_to_chinese_text(self) -> None:
+        self.assertEqual(
+            NUMERIC_TOKEN_RE.findall("参数量为1.7B，得分从4.17提升到4.01。"),
+            ["1.7B", "4.17", "4.01"],
+        )
+        self.assertEqual(NUMERIC_TOKEN_RE.findall("Qwen3.5 model"), [])
+
+    def test_translation_can_reorder_complete_numeric_clauses(self) -> None:
+        blocks = [
+            {
+                "id": "paragraph-001",
+                "type": "paragraph",
+                "text_en": "Method A scores 1.0, while Method B scores 2.0.",
+                "page_refs": [4],
+            }
+        ]
+        reordered = completion(
+            {
+                "translations": [
+                    {
+                        "id": "paragraph-001",
+                        "text_zh": "方法 B 得分为2.0，而方法 A 得分为1.0。",
+                    }
+                ]
+            }
+        )
+        with patch(
+            "backend.deep_summary.request_chat_completion", return_value=reordered
+        ) as request:
+            merged, _ = translate_report_blocks(blocks, settings())
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(merged[0]["text_zh"], "方法 B 得分为2.0，而方法 A 得分为1.0。")
+
     def test_translation_retries_id_mismatch_and_merges_by_id(self) -> None:
         wrong = {"translations": [{"id": "wrong", "text_zh": "错误"}]}
         correct = {
@@ -180,13 +214,180 @@ class DeepSummaryTranslationTestCase(unittest.TestCase):
                 {"id": "paragraph-001", "text_zh": "WER 从 12.5% 改善到 8.0%。"},
             ]
         }
-        with patch(
-            "backend.deep_summary.request_chat_completion",
-            return_value=completion(wrong_numbers),
-        ):
-            with self.assertRaisesRegex(Exception, "numeric content"):
+        def fake_request(payload: dict, _settings: dict, **_kwargs: object) -> dict:
+            request_data = json.loads(payload["messages"][1]["content"].split("\n\n")[-1])
+            requested = request_data["blocks"]
+            if len(requested) == 1 and requested[0]["id"] == "heading-001":
+                return completion(
+                    {"translations": [{"id": "heading-001", "text_zh": "评测结果"}]}
+                )
+            if len(requested) == 1:
+                return completion(
+                    {
+                        "translations": [
+                            {"id": "paragraph-001", "text_zh": "WER 从 12.5% 改善到 8.0%。"}
+                        ]
+                    }
+                )
+            return completion(wrong_numbers)
+
+        with patch("backend.deep_summary.request_chat_completion", side_effect=fake_request):
+            with self.assertRaises(Exception):
                 translate_report_blocks(self.blocks, settings())
         self.assertNotIn("text_zh", self.blocks[1])
+
+    def test_translation_retries_only_numeric_mismatches_with_exact_feedback(self) -> None:
+        wrong_numbers = {
+            "translations": [
+                {"id": "heading-001", "text_zh": "评测结果"},
+                {"id": "paragraph-001", "text_zh": "WER 从 12.5% 改善到 8.0%。"},
+            ]
+        }
+        corrected = {
+            "translations": [
+                {
+                    "id": "paragraph-001",
+                    "text_zh": "WER 最终为 <PVNUM_B/>，起始为 PVNUM_A。",
+                }
+            ]
+        }
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=[completion(wrong_numbers), completion(corrected)],
+        ) as request:
+            merged, _ = translate_report_blocks(self.blocks, settings())
+
+        self.assertEqual(request.call_count, 2)
+        correction_prompt = request.call_args_list[1].args[0]["messages"][1]["content"]
+        correction_payload = json.loads(correction_prompt.split("\n\n")[-1])
+        self.assertEqual(
+            [block["id"] for block in correction_payload["blocks"]], ["paragraph-001"]
+        )
+        self.assertEqual(
+            correction_payload["blocks"][0]["text_en"],
+            "WER improves from [[PVNUM_A]] to [[PVNUM_B]].",
+        )
+        self.assertIn("Copy every placeholder exactly once", correction_prompt)
+        self.assertEqual(merged[0]["text_zh"], "评测结果")
+        self.assertEqual(merged[1]["text_zh"], "WER 最终为 9.1%，起始为 12.5%。")
+
+    def test_numeric_retry_can_translate_sentence_segments_into_one_block(self) -> None:
+        blocks = [
+            {
+                "id": "paragraph-001",
+                "type": "paragraph",
+                "text_en": "First result is 1.0. Second result is 2.0.",
+                "page_refs": [4],
+            }
+        ]
+        initial = completion(
+            {"translations": [{"id": "paragraph-001", "text_zh": "第一项和第二项结果。"}]}
+        )
+        missing_placeholders = completion(
+            {"translations": [{"id": "paragraph-001", "text_zh": "第一项和第二项结果。"}]}
+        )
+        segmented = completion(
+            {
+                "translations": [
+                    {
+                        "id": "paragraph-001-part-A",
+                        "text_zh": "第一项结果为 [[PVNUM_A]]。",
+                    },
+                    {
+                        "id": "paragraph-001-part-B",
+                        "text_zh": "第二项结果为 [[PVNUM_A]]。",
+                    },
+                ]
+            }
+        )
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=[initial, missing_placeholders, missing_placeholders, segmented],
+        ) as request:
+            merged, _ = translate_report_blocks(blocks, settings())
+        self.assertEqual(request.call_count, 4)
+        self.assertEqual(
+            merged[0]["text_zh"], "第一项结果为 1.0。 第二项结果为 2.0。"
+        )
+
+    def test_numeric_retry_can_translate_text_spans_around_original_numbers(self) -> None:
+        blocks = [
+            {
+                "id": "paragraph-001",
+                "type": "paragraph",
+                "text_en": "Score is 1.0.",
+                "page_refs": [4],
+            }
+        ]
+        missing = completion(
+            {"translations": [{"id": "paragraph-001", "text_zh": "分数如下。"}]}
+        )
+        def fake_request(payload: dict, _settings: dict, **_kwargs: object) -> dict:
+            request_data = json.loads(payload["messages"][1]["content"].split("\n\n")[-1])
+            requested_ids = [item["id"] for item in request_data["blocks"]]
+            if requested_ids and all("-span-" in block_id for block_id in requested_ids):
+                return completion(
+                    {
+                        "translations": [
+                            {"id": block_id, "text_zh": "分数为"}
+                            for block_id in requested_ids
+                        ]
+                    }
+                )
+            return missing
+
+        with patch(
+            "backend.deep_summary.request_chat_completion", side_effect=fake_request
+        ) as request:
+            merged, _ = translate_report_blocks(blocks, settings())
+        self.assertEqual(request.call_count, 4)
+        self.assertEqual(merged[0]["text_zh"], "分数为1.0.")
+
+    def test_translation_blocks_shape_is_normalized_without_retranslation(self) -> None:
+        wrong_shape = {
+            "blocks": [
+                {"id": "heading-001", "type": "heading", "text_zh": "评测结果"},
+                {
+                    "id": "paragraph-001",
+                    "type": "paragraph",
+                    "text_zh": "WER 从 12.5% 改善到 9.1%。",
+                },
+            ]
+        }
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            return_value=completion(wrong_shape),
+        ) as request:
+            merged, _ = translate_report_blocks(self.blocks, settings())
+        self.assertEqual(merged[1]["text_zh"], "WER 从 12.5% 改善到 9.1%。")
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_args.kwargs["task"], "translation")
+
+    def test_translation_fallback_bisects_invalid_batches_to_single_blocks(self) -> None:
+        invalid = completion({"translations": []})
+        heading = completion(
+            {"translations": [{"id": "heading-001", "text_zh": "评测结果"}]}
+        )
+        paragraph = completion(
+            {
+                "translations": [
+                    {"id": "paragraph-001", "text_zh": "WER 从 12.5% 改善到 9.1%。"}
+                ]
+            }
+        )
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=[invalid, invalid, invalid, invalid, heading, paragraph],
+        ) as request:
+            merged, _ = translate_report_blocks(self.blocks, settings())
+        self.assertEqual(merged[0]["text_zh"], "评测结果")
+        self.assertEqual(merged[1]["text_zh"], "WER 从 12.5% 改善到 9.1%。")
+        self.assertEqual(request.call_count, 6)
+        final_payloads = [
+            json.loads(call.args[0]["messages"][1]["content"].split("\n\n")[-1])
+            for call in request.call_args_list[-2:]
+        ]
+        self.assertEqual([len(payload["blocks"]) for payload in final_payloads], [1, 1])
 
 
 if __name__ == "__main__":

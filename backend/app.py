@@ -1600,6 +1600,26 @@ def paper_quality_key(paper: dict[str, Any]) -> tuple[int, str, str]:
 
 def friendly_model_error(message: str) -> tuple[str, str]:
     lowered = message.casefold()
+    if "translation changed numeric content" in lowered:
+        return (
+            "中文翻译未通过数字一致性校验，英文报告已保留。请重新翻译。",
+            "translation_numeric_mismatch",
+        )
+    if "translation block ids or order" in lowered or "translations array" in lowered:
+        return (
+            "中文翻译的段落 ID 或顺序不完整，英文报告已保留。请重新翻译。",
+            "translation_structure_error",
+        )
+    if "invalid json" in lowered or "non-object json" in lowered:
+        return (
+            "模型返回的 JSON 结构无效，当前结果没有被覆盖。请重试。",
+            "model_invalid_json",
+        )
+    if "truncated" in lowered or "continuation limit" in lowered:
+        return (
+            "模型输出被截断，当前结果没有被覆盖。请重试或调整模型输出限制。",
+            "model_output_truncated",
+        )
     if "insufficient balance" in lowered or "(402)" in lowered:
         return (
             "模型服务账户余额不足，当前摘要没有被覆盖。请充值或更换 API Key 后重试。",
