@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
+
+import pymupdf
 
 from backend.llm import _apply_provider_controls, _parse_pairs, local_draft
 from backend.offline_translation import translate_english_offline
 from backend.pronunciation import american_ipa
-from backend.pdf_parser import infer_publication_year
+from backend.pdf_parser import (
+    extract_visual_pages, infer_authors, infer_publication_year, normalize_pdf_authors,
+)
 
 
 class SummaryFormatTestCase(unittest.TestCase):
@@ -51,6 +57,28 @@ class SummaryFormatTestCase(unittest.TestCase):
             infer_publication_year("References include work from 2021.", "paper-title-2025.pdf"),
             2025,
         )
+
+    def test_invalid_year_author_metadata_is_rejected(self) -> None:
+        self.assertEqual(normalize_pdf_authors("2024"), "")
+        self.assertEqual(normalize_pdf_authors("2024, 2025"), "")
+        self.assertEqual(normalize_pdf_authors("Ada Researcher"), "Ada Researcher")
+
+    def test_authors_can_be_inferred_conservatively_from_first_page(self) -> None:
+        text = "Reliable Paper Title\nAda Lovelace, Alan Turing\nUniversity of Example\nAbstract\nBody"
+        self.assertEqual(
+            infer_authors(text, "Reliable Paper Title"), "Ada Lovelace, Alan Turing"
+        )
+
+    def test_visual_extraction_ignores_a_text_only_figure_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pdf_path = root / "reference-only.pdf"
+            document = pymupdf.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "As shown in Figure 2, the prior method is slower.")
+            document.save(pdf_path)
+            document.close()
+            self.assertEqual(extract_visual_pages(pdf_path, root / "assets"), [])
 
     def test_enriched_pairs_and_verbatim_terms_are_preserved(self) -> None:
         content = json.dumps(

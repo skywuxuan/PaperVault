@@ -124,14 +124,17 @@ class AnalysisApiTestCase(unittest.TestCase):
         self.paper_id = insert_test_paper(self.server.db)
         asset_directory = self.server.asset_dir / self.paper_id
         asset_directory.mkdir(parents=True, exist_ok=True)
-        (asset_directory / "page-1.png").write_bytes(b"\x89PNG\r\n\x1a\nfigure-content")
+        filename = "visual-1-figure-1-a1b2c3d4.png"
+        (asset_directory / filename).write_bytes(b"\x89PNG\r\n\x1a\nfigure-content")
         self.server.db.update_paper(
             self.paper_id,
             {
                 "visual_assets": [
                     {
                         "page": 1,
-                        "filename": "page-1.png",
+                        "filename": filename,
+                        "kind": "figure",
+                        "caption": "Figure 1. Method and retrieval architecture",
                         "title_en": "Method and retrieval architecture",
                         "title_zh": "方法与检索架构",
                     }
@@ -171,7 +174,10 @@ class AnalysisApiTestCase(unittest.TestCase):
             job = self.wait_for_job(data["job"]["id"])
             self.assertEqual(job["status"], "succeeded")
             self.assertEqual(len(job["input_hash"]), 64)
-            self.assertTrue(job["prompt_version"].endswith("-v1"))
+            self.assertEqual(
+                job["prompt_version"],
+                {"quick-read": "quick-read-v1", "figure-analysis": "figure-analysis-v2"}[slug],
+            )
         status, analyses = self.request("GET", f"/api/papers/{self.paper_id}/analyses")
         self.assertEqual(status, 200)
         self.assertEqual(set(analyses["latest"]), {"quick_read", "figure_analysis"})
@@ -180,6 +186,25 @@ class AnalysisApiTestCase(unittest.TestCase):
             analyses["latest"]["figure_analysis"]["content"]["figures"][0]["page"], 1
         )
         self.assertEqual(self.server.db.get_paper(self.paper_id)["summary_pairs"], original_pairs)
+
+    def test_visual_refresh_failure_preserves_existing_asset_index(self) -> None:
+        legacy_assets = [{"page": 1, "filename": "page-1.png"}]
+        self.server.db.update_paper(
+            self.paper_id,
+            {"visual_assets": legacy_assets},
+            None,
+        )
+        upload = self.server.upload_dir / f"{self.paper_id}.pdf"
+        upload.write_bytes(b"%PDF-1.4\n")
+
+        with patch("backend.app.extract_visual_pages", side_effect=RuntimeError("render failed")):
+            paper = self.server.ensure_visual_assets(self.paper_id, refresh_legacy=True)
+
+        self.assertIsNotNone(paper)
+        self.assertEqual(paper["visual_assets"], legacy_assets)
+        self.assertEqual(
+            self.server.db.get_paper(self.paper_id)["visual_assets"], legacy_assets
+        )
 
     def test_qa_requires_configuration_and_filters_sources_to_model_citations(self) -> None:
         status, unavailable = self.request(
@@ -217,10 +242,11 @@ class AnalysisApiTestCase(unittest.TestCase):
     def test_soft_delete_keeps_files_and_can_be_restored(self) -> None:
         upload = self.server.upload_dir / f"{self.paper_id}.pdf"
         upload.write_bytes(b"%PDF-1.4\n")
+        asset_filename = self.server.db.get_paper(self.paper_id)["visual_assets"][0]["filename"]
         status, _ = self.request("DELETE", f"/api/papers/{self.paper_id}")
         self.assertEqual(status, 200)
         self.assertTrue(upload.is_file())
-        self.assertTrue((self.server.asset_dir / self.paper_id / "page-1.png").is_file())
+        self.assertTrue((self.server.asset_dir / self.paper_id / asset_filename).is_file())
         status, _ = self.request("GET", f"/api/papers/{self.paper_id}")
         self.assertEqual(status, 404)
         status, trash = self.request("GET", "/api/trash")

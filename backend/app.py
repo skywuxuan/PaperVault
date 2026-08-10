@@ -51,7 +51,9 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 PAPER_ROUTE_RE = re.compile(r"^/api/papers/([0-9a-f-]+)$")
 PAPER_FILE_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/file$")
-PAPER_ASSET_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/assets/(page-[0-9]+\.png)$")
+PAPER_ASSET_RE = re.compile(
+    r"^/api/papers/([0-9a-f-]+)/assets/((?:page-[0-9]+|visual-[0-9]+-(?:figure|table)-[0-9a-z]+-[0-9a-f]{8})\.png)$"
+)
 PAPER_PAGE_IMAGE_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)\.png$")
 PAPER_PAGE_TEXT_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)/text$")
 PAPER_SUMMARY_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/generate-summary$")
@@ -144,7 +146,7 @@ class PaperVaultServer(ThreadingHTTPServer):
             if paper is None:
                 raise SummaryError("Paper is unavailable or in the recycle bin")
             if job["job_type"] == "figure_analysis":
-                self.ensure_visual_assets(paper_id)
+                self.ensure_visual_assets(paper_id, refresh_legacy=True)
                 paper = self.db.get_paper(paper_id, include_text=True) or paper
             chunks = self.ensure_text_index(paper_id)
             input_hash = analysis_input_hash(paper, job["job_type"], self.asset_dir)
@@ -221,7 +223,7 @@ class PaperVaultServer(ThreadingHTTPServer):
         if existing is not None:
             return existing, False
         if job_type == "figure_analysis":
-            self.ensure_visual_assets(paper_id)
+            self.ensure_visual_assets(paper_id, refresh_legacy=True)
             paper = self.db.get_paper(paper_id, include_text=True) or paper
         settings = self.db.get_settings(include_secret=True)
         prompt_version = (
@@ -244,19 +246,28 @@ class PaperVaultServer(ThreadingHTTPServer):
         self.notify_job_worker()
         return job, True
 
-    def ensure_visual_assets(self, paper_id: str) -> dict[str, Any] | None:
+    def ensure_visual_assets(
+        self, paper_id: str, refresh_legacy: bool = False
+    ) -> dict[str, Any] | None:
         paper = self.db.get_paper(paper_id)
-        if paper is None or paper.get("visual_assets"):
+        if paper is None:
+            return paper
+        assets = paper.get("visual_assets", [])
+        modern_assets = bool(assets) and all(
+            asset.get("kind") in {"figure", "table"} and asset.get("caption")
+            for asset in assets
+        )
+        if assets and (not refresh_legacy or modern_assets):
             return paper
         pdf_path = self.upload_dir / paper["stored_filename"]
         if not pdf_path.is_file():
             return paper
         try:
-            assets = extract_visual_pages(pdf_path, self.asset_dir / paper_id)
+            refreshed_assets = extract_visual_pages(pdf_path, self.asset_dir / paper_id)
         except Exception:
-            assets = []
-        if assets:
-            return self.db.update_paper(paper_id, {"visual_assets": assets}, None)
+            return paper
+        if refreshed_assets or refresh_legacy:
+            return self.db.update_paper(paper_id, {"visual_assets": refreshed_assets}, None)
         return paper
 
     def remove_paper_record(self, paper_id: str) -> bool:
@@ -975,10 +986,6 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         paper = self.server.ensure_visual_assets(paper_id)
         if paper is None:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
-            return
-        known_files = {str(asset.get("filename", "")) for asset in paper.get("visual_assets", [])}
-        if filename not in known_files:
-            self.send_error_json(HTTPStatus.NOT_FOUND, "Visual asset not found")
             return
         path = self.server.asset_dir / paper_id / filename
         if not path.is_file():

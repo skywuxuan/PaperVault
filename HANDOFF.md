@@ -19,7 +19,7 @@ Windows desktop development startup:
 Desktop health response:
 
 ```json
-{"status":"ok","version":"2.0.0"}
+{"status":"ok","version":"2.0.1"}
 ```
 
 The desktop shell chooses an ephemeral localhost port. The legacy browser mode
@@ -36,7 +36,8 @@ The Windows desktop package is built with:
 ```
 
 The verified portable executable is `dist\PaperVault\PaperVault.exe`. No
-PaperVault service is intentionally left running after the final QA pass.
+packaged process is intentionally left running after QA. The source browser
+service is expected at `http://127.0.0.1:8765` with the active project data directory.
 
 ## 2. Product Scope
 
@@ -161,7 +162,7 @@ must continue to use temporary data directories.
 - Structured 40-55 sentence-pair report organized into paper information, background, architecture, data/training, experiments, quantitative results, conclusions, limitations, and innovations.
 - English and Chinese are stored as aligned sentence pairs.
 - Markdown-like document rendering with sections, numbered statements, evidence page references, and inline figures.
-- Clicking either language sentence highlights and scrolls to the corresponding sentence.
+- Clicking either language sentence highlights the pair and aligns the corresponding sentence to the same viewport height in the other column.
 - Clicking a summary figure synchronizes the corresponding figure in the other language and the source PDF page.
 - Chinese summary can be exported as Markdown.
 - Existing summaries are preserved if a regeneration request fails.
@@ -171,7 +172,7 @@ must continue to use temporary data directories.
 
 - Existing 40–55 pair bilingual summaries remain the independent deep-read source in `papers.summary_pairs`.
 - Quick read is stored separately and covers the headline, motivation, method, findings, contributions, limitations, and reading guide with PDF page evidence.
-- Figure analysis uses existing PyMuPDF page assets and explains what to inspect, what the page supports, and why it matters.
+- Figure analysis requires numbered Figure/Fig./Table captions and uses PyMuPDF to crop the matching image, vector, or table region instead of treating incidental body references or complete pages as figures.
 - Figure analysis is safely text-grounded when the configured model has no image capability; it never claims pixel inspection.
 - Analysis input hashes include paper content and, for figures, actual image-file content hashes rather than only file paths.
 - `analysis_jobs` persists queued/running/succeeded/failed states, attempts, errors, provider/model, tokens, duration, input hash, and prompt version.
@@ -192,7 +193,8 @@ must continue to use temporary data directories.
 - Local PDF page renderer instead of an embedded browser PDF plugin.
 - Page navigation, zoom, fit width, and trackpad `Ctrl`/pinch-style zoom scoped to the PDF panel.
 - Text selection and double-click word translation.
-- Persistent PDF highlights with four colors.
+- Persistent PDF highlights with four colors and connected same-line highlight bands.
+- Selecting an already highlighted range exposes a direct cancel-highlight action; the annotation popover uses the same action wording.
 - Optional annotation notes.
 - The deep-read reader panels can be independently collapsed.
 - The reader has compact Quick read / Bilingual deep read / Ask paper / Notes modes.
@@ -208,7 +210,9 @@ must continue to use temporary data directories.
 
 ### Library and batch operations
 
-- Hugging Face-inspired dense paper list and faceted sidebar.
+- Hugging Face-inspired compact paper list and faceted sidebar; paper rows remain dense on desktop and narrow windows.
+- Ratings are right-aligned, while authors and introductions are collapsed by default under an explicit details disclosure.
+- Pure publication years and generic PDF metadata are not displayed as authors; future imports reject those values and conservatively infer a likely first-page author line.
 - Search title, author, DOI, summary, and tags.
 - Sort by recent import, rating, publication year, or title.
 - Filter by custom tag, summary status, and rating.
@@ -363,12 +367,12 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-29 tests passed
+33 tests passed
 JavaScript syntax check passed
 Windows PyInstaller `onedir` build passed
-Packaged EXE health check returned version 2.0.0 using a temporary data directory
+Packaged EXE health check returned version 2.0.1 using a temporary data directory
 Desktop and 390px-wide browser interaction and screenshot QA passed against temporary data
-Quick-read jobs, figure jobs, historical versions, evidence-page jumps, unavailable QA state, and notes were exercised
+Connected/cancelable highlights, cropped figure/table assets, bilingual sentence alignment, compact library rows, and invalid-author fallback were exercised
 No browser console warnings or errors in the final check
 ```
 
@@ -405,5 +409,5 @@ Use this as the first message in the next development conversation:
 请先完整阅读：
 C:\Users\skywu\Documents\Codex\PaperVault\HANDOFF.md
 
-继续开发 PaperVault 2.0.0。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出或复制 API Key。真实库最近只读观察为 9 条记录，不要按旧交接强制改回 4 条。沿用现有 `/api/*`、持久化分析任务、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
+继续开发 PaperVault 2.0.1。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出或复制 API Key。真实库最近只读观察为 9 条记录，不要按旧交接强制改回 4 条。沿用现有 `/api/*`、持久化分析任务、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
 ```

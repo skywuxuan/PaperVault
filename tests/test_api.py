@@ -84,7 +84,7 @@ class ApiTestCase(unittest.TestCase):
             {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})}
         )
         stream = DecodedStreamObject()
-        stream.set_data(b"BT /F1 14 Tf 72 760 Td (Fig. 1. Test architecture.) Tj ET")
+        stream.set_data(b"q 72 500 300 180 re S Q BT /F1 14 Tf 72 760 Td (Fig. 1. Test architecture.) Tj ET")
         page[NameObject("/Contents")] = writer._add_object(stream)
         writer.add_metadata({"/Title": "Local Research Paper", "/Author": "Ada Researcher"})
         buffer = io.BytesIO()
@@ -109,6 +109,9 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(paper["summary_model"], "")
         self.assertEqual(paper["tags"][0]["name"], "Vision")
         self.assertEqual(len(paper["visual_assets"]), 1)
+        self.assertEqual(paper["visual_assets"][0]["kind"], "figure")
+        self.assertIn("Fig. 1", paper["visual_assets"][0]["caption"])
+        self.assertTrue(paper["visual_assets"][0]["filename"].startswith("visual-1-figure-1-"))
 
         first_paper_id = paper_id
         duplicate_fields = {
@@ -146,7 +149,9 @@ class ApiTestCase(unittest.TestCase):
         asset_connection.request("GET", f"/api/papers/{paper_id}/assets/{asset['filename']}")
         asset_response = asset_connection.getresponse()
         asset_bytes = asset_response.read()
-        self.assertEqual(asset_response.status, 200)
+        self.assertEqual(
+            asset_response.status, 200, asset_bytes.decode("utf-8", errors="replace")
+        )
         self.assertEqual(asset_response.getheader("Content-Type"), "image/png")
         self.assertTrue(asset_bytes.startswith(b"\x89PNG"))
         asset_connection.close()

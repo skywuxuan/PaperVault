@@ -10,7 +10,7 @@ from .llm import SummaryError, request_structured_json
 
 
 QUICK_READ_PROMPT_VERSION = "quick-read-v1"
-FIGURE_ANALYSIS_PROMPT_VERSION = "figure-analysis-v1"
+FIGURE_ANALYSIS_PROMPT_VERSION = "figure-analysis-v2"
 QA_PROMPT_VERSION = "citation-qa-v1"
 
 
@@ -179,13 +179,23 @@ def generate_figure_analysis(
             {
                 "page": page,
                 "asset_path": candidate["asset_path"],
+                "asset_kind": candidate["asset_kind"],
+                "caption": candidate["caption"],
                 "title": candidate["title"],
-                "look_for": "先看图表标题、坐标轴、图例和相对变化，再核对正文解释。",
-                "evidence": _first_sentence(candidate["page_text"]),
-                "importance": "该页被方法图、结果表或消融关键词命中，是精读的高价值入口。",
+                "look_for": (
+                    "先看表头、行列定义和关键数值，再比较基线与完整系统。"
+                    if candidate["asset_kind"] == "table"
+                    else "先看图表标题、坐标轴、图例和相对变化，再核对正文解释。"
+                ),
+                "evidence": f"图表标题：{candidate['caption']}",
+                "importance": "该视觉区域具有明确的图表编号和标题，是精读方法或实验结果的高价值入口。",
             }
         )
-    return {"figures": figures, "analysis_mode": "text_grounded"}, "local", 0
+    return {
+        "figures": figures,
+        "analysis_mode": "text_grounded",
+        "empty_reason": "" if figures else "未检测到具有明确编号和标题的图表区域。",
+    }, "local", 0
 
 
 def answer_with_citations(
@@ -271,6 +281,8 @@ def _normalize_figure_analysis(
             {
                 "page": page,
                 "asset_path": candidate["asset_path"],
+                "asset_kind": candidate["asset_kind"],
+                "caption": candidate["caption"],
                 "title": candidate["title"],
                 **values,
             }
@@ -293,15 +305,24 @@ def _figure_candidates(
             page = int(asset.get("page", 0))
         except (TypeError, ValueError):
             continue
+        kind = str(asset.get("kind", ""))
+        caption = str(asset.get("caption", "")).strip()
         filename = str(asset.get("filename", ""))
-        if page < 1 or not re.fullmatch(r"page-[0-9]+\.png", filename):
+        if (
+            page < 1
+            or kind not in {"figure", "table"}
+            or not caption
+            or not re.fullmatch(r"visual-[0-9]+-(?:figure|table)-[0-9a-z]+-[0-9a-f]{8}\.png", filename)
+        ):
             continue
         candidates.append(
             {
                 "page": page,
                 "asset_path": f"assets/{paper.get('id')}/{filename}",
-                "title": str(asset.get("title_zh") or asset.get("title_en") or f"第 {page} 页图表"),
-                "page_text": by_page.get(page, "该页包含候选视觉证据。"),
+                "asset_kind": kind,
+                "caption": caption,
+                "title": caption,
+                "page_text": by_page.get(page, caption),
             }
         )
     return candidates

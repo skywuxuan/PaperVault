@@ -490,6 +490,7 @@
   <div id="pdfSelectionToolbar" class="pdf-selection-toolbar" role="toolbar" aria-label="PDF 选区工具" hidden>
     <button id="highlightSelectionButton" type="button"><span class="highlight-tool-swatch" aria-hidden="true"></span> 高亮</button>
     <button id="noteSelectionButton" type="button"><span aria-hidden="true">✎</span> 批注</button>
+    <button id="removeSelectionHighlightButton" class="remove-highlight-tool" type="button" hidden><span aria-hidden="true">×</span> 取消高亮</button>
   </div>
   <div id="pdfAnnotationPopover" class="pdf-annotation-popover" role="dialog" aria-label="PDF 批注" hidden>
     <button id="closeAnnotationPopover" class="pdf-annotation-close" type="button" aria-label="关闭" title="关闭">&times;</button>
@@ -503,7 +504,7 @@
     </div>
     <textarea id="annotationNote" rows="3" maxlength="4000" placeholder="添加批注"></textarea>
     <div class="pdf-annotation-footer">
-      <button id="deleteAnnotationButton" class="annotation-delete-button" type="button">删除</button>
+      <button id="deleteAnnotationButton" class="annotation-delete-button" type="button">取消高亮</button>
       <button id="saveAnnotationButton" class="primary-button" type="button">保存</button>
     </div>
   </div>

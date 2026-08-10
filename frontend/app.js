@@ -148,6 +148,22 @@ function paperSnippet(paper) {
   return preferred?.zh || pairs[0].en || "";
 }
 
+function paperAuthors(paper) {
+  const authors = String(paper.authors || "").trim();
+  if (!authors) return "";
+  if (/^(?:(?:19|20)\d{2}[\s,;/·-]*)+$/.test(authors)) return "";
+  if (/^(?:anonymous|unknown|admin(?:istrator)?|microsoft word|latex|arxiv)$/i.test(authors)) return "";
+  if (/https?:\/\/|\bdoi\b|@/i.test(authors)) return "";
+  return authors;
+}
+
+function paperAuthorDetails(paper) {
+  return [
+    paperAuthors(paper) || "作者信息未识别",
+    paper.publication_year,
+  ].filter(Boolean).join(" · ");
+}
+
 function latestPaperJob(paper) {
   const jobs = Object.values(paper.analysis_jobs || {});
   return jobs.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))[0] || null;
@@ -265,23 +281,30 @@ function renderLibrary() {
     });
     titleLine.append(make("span", "paper-type-mark", "PDF"), make("h2", "paper-title", paper.title), readButton);
     content.append(titleLine);
-    const authorLine = [paper.authors, paper.publication_year].filter(Boolean).join(" · ") || paper.original_filename;
-    content.append(make("p", "paper-authors", authorLine));
-    content.append(make("p", "paper-snippet", paperSnippet(paper)));
+    const details = make("details", "paper-details");
+    const detailsSummary = make("summary", "paper-details-toggle", "作者与简介");
+    details.append(
+      detailsSummary,
+      make("p", "paper-authors", paperAuthorDetails(paper)),
+      make("p", "paper-snippet", paperSnippet(paper)),
+    );
+    content.append(details);
     const classification = make("div", "paper-tags paper-classification");
     paper.tags.forEach((tag) => classification.append(tagChip(tag)));
-    classification.append(ratingControl(paper));
-    content.append(classification);
+    if (paper.tags.length) content.append(classification);
 
     const facts = make("div", "paper-facts");
+    facts.append(ratingControl(paper, "paper-row-rating"));
+    const metrics = make("span", "paper-metrics");
     const pages = make("span");
     pages.append(make("strong", "", `${paper.page_count || "-"}`), document.createTextNode(" 页"));
-    const created = make("span", "paper-added-date", `入库 ${formatDate(paper.created_at)}`);
-    facts.append(pages, make("span", "", formatBytes(paper.file_size)), created);
+    metrics.append(pages, make("span", "", formatBytes(paper.file_size)));
+    facts.append(metrics);
     const summaryState = make("span", `summary-state ${paper.summary_status || "pending"}`, statusLabels[paper.summary_status] || "待生成");
     facts.append(summaryState);
     const latestJob = latestPaperJob(paper);
     if (latestJob) facts.append(make("span", `analysis-state ${latestJob.status}`, jobStatusLabel(latestJob)));
+    facts.append(make("span", "paper-added-date", `入库 ${formatDate(paper.created_at)}`));
     row.append(checkboxLabel, content, facts, make("span", "row-arrow", "→"));
     list.append(row);
   }
@@ -972,6 +995,7 @@ async function loadPdfPage(shell) {
       span.dataset.word = word.text;
       span.dataset.wordIndex = String(wordIndex);
       span.dataset.context = word.line || "";
+      span.dataset.lineKey = `${word.block ?? 0}:${word.line_number ?? wordIndex}`;
       span.addEventListener("pointerdown", (event) => beginPdfPointerSelection(event, page, layer));
       span.addEventListener("click", (event) => openAnnotationFromWord(event, page));
       span.addEventListener("dblclick", (event) => translatePdfWord(event, page));
@@ -1032,6 +1056,8 @@ function applyPdfAnnotations(page, layer) {
     word.classList.remove("pdf-highlight", "has-annotation-note");
     delete word.dataset.annotationIds;
     delete word.dataset.highlightColor;
+    word.style.removeProperty("--highlight-left");
+    word.style.removeProperty("--highlight-right");
   });
   const annotations = state.pdfAnnotations.filter((annotation) => Number(annotation.page) === page);
   for (const annotation of annotations) {
@@ -1044,6 +1070,48 @@ function applyPdfAnnotations(page, layer) {
       ids.push(annotation.id);
       word.dataset.annotationIds = ids.join(",");
       if (annotation.note && index === Number(annotation.end_word)) word.classList.add("has-annotation-note");
+    }
+  }
+  connectPdfHighlightRuns(words);
+}
+
+function connectPdfHighlightRuns(words) {
+  const sharedAnnotation = (left, right) => {
+    const rightIds = new Set((right.dataset.annotationIds || "").split(",").filter(Boolean));
+    return (left.dataset.annotationIds || "").split(",").some((id) => rightIds.has(id));
+  };
+  const geometry = (word) => ({
+    left: Number.parseFloat(word.style.left) || 0,
+    width: Number.parseFloat(word.style.width) || 0,
+    height: Number.parseFloat(word.style.height) || 0,
+  });
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    if (!word.classList.contains("pdf-highlight")) continue;
+    const current = geometry(word);
+    const previous = words[index - 1];
+    if (
+      previous?.classList.contains("pdf-highlight")
+      && previous.dataset.lineKey === word.dataset.lineKey
+      && sharedAnnotation(previous, word)
+    ) {
+      const previousBox = geometry(previous);
+      const gap = current.left - previousBox.left - previousBox.width;
+      if (gap >= 0 && gap <= Math.max(0.5, current.height * 1.4)) {
+        word.style.setProperty("--highlight-left", `${-(gap / 2 / Math.max(current.width, 0.01) * 100)}%`);
+      }
+    }
+    const next = words[index + 1];
+    if (
+      next?.classList.contains("pdf-highlight")
+      && next.dataset.lineKey === word.dataset.lineKey
+      && sharedAnnotation(word, next)
+    ) {
+      const nextBox = geometry(next);
+      const gap = nextBox.left - current.left - current.width;
+      if (gap >= 0 && gap <= Math.max(0.5, current.height * 1.4)) {
+        word.style.setProperty("--highlight-right", `${-(gap / 2 / Math.max(current.width, 0.01) * 100)}%`);
+      }
     }
   }
 }
@@ -1151,8 +1219,19 @@ function pdfWordFromNode(node) {
   return element?.closest?.(".pdf-word") || null;
 }
 
+function annotationsForPdfSelection(selection = state.pdfSelection) {
+  if (!selection) return [];
+  return state.pdfAnnotations.filter((annotation) => (
+    Number(annotation.page) === Number(selection.page)
+    && Number(annotation.start_word) <= Number(selection.end_word)
+    && Number(annotation.end_word) >= Number(selection.start_word)
+  ));
+}
+
 function showPdfSelectionToolbar(anchor) {
   const toolbar = $("#pdfSelectionToolbar");
+  const overlapping = annotationsForPdfSelection();
+  $("#removeSelectionHighlightButton").hidden = overlapping.length === 0;
   toolbar.hidden = false;
   const box = toolbar.getBoundingClientRect();
   const left = Math.max(10, Math.min(window.innerWidth - box.width - 10, anchor.left - box.width / 2));
@@ -1189,6 +1268,23 @@ async function createPdfAnnotation(openEditor = false) {
   closePdfSelectionToolbar(true);
   toast("高亮已保存");
   if (openEditor) showAnnotationPopover(result.annotation, anchor);
+}
+
+async function removePdfSelectionHighlights() {
+  const selection = state.pdfSelection;
+  const annotations = annotationsForPdfSelection(selection);
+  if (!selection || !annotations.length) return;
+  await Promise.all(annotations.map((annotation) => (
+    api(`/api/annotations/${annotation.id}`, { method: "DELETE" })
+  )));
+  const removedIds = new Set(annotations.map((annotation) => annotation.id));
+  state.pdfAnnotations = state.pdfAnnotations.filter((annotation) => !removedIds.has(annotation.id));
+  const layer = $(`.pdf-page[data-page="${selection.page}"] .pdf-text-layer`, $("#pdfViewer"));
+  if (layer) applyPdfAnnotations(Number(selection.page), layer);
+  updateAnnotationCount();
+  renderNotesPanel();
+  closePdfSelectionToolbar(true);
+  toast(annotations.length === 1 ? "高亮已取消" : `已取消 ${annotations.length} 处高亮`);
 }
 
 function openAnnotationFromWord(event, page) {
@@ -1261,7 +1357,7 @@ async function deleteAnnotation() {
   updateAnnotationCount();
   renderNotesPanel();
   closeAnnotationPopover();
-  toast("高亮已删除");
+  toast("高亮已取消");
 }
 
 function updateAnnotationCount() {
@@ -1365,7 +1461,7 @@ function renderReaderIdentity(paper) {
   $("#readerTitle").textContent = paper.title;
   const meta = $("#readerMeta");
   meta.replaceChildren();
-  const details = [paper.authors, paper.publication_year, paper.doi].filter(Boolean);
+  const details = [paperAuthors(paper), paper.publication_year, paper.doi].filter(Boolean);
   if (details.length) meta.append(make("span", "", details.join(" · ")));
   paper.tags.forEach((tag) => meta.append(tagChip(tag)));
   meta.append(ratingControl(paper, "reader-rating"));
@@ -1563,7 +1659,11 @@ function renderFigureAnalysisContent(run) {
   container.replaceChildren();
   const figures = run?.content?.figures || [];
   if (!figures.length) {
-    container.append(make("p", "analysis-empty", "尚未生成关键图表分析。"));
+    container.append(make(
+      "p",
+      "analysis-empty",
+      run?.content?.empty_reason || "尚未生成关键图表分析。",
+    ));
     return;
   }
   for (const figure of figures) {
@@ -1579,7 +1679,12 @@ function renderFigureAnalysisContent(run) {
     }
     const body = make("div", "figure-analysis-body");
     const heading = make("div", "figure-analysis-heading");
-    heading.append(make("h4", "", figure.title || `第 ${figure.page} 页`), pageJumpButton(figure.page));
+    const headingText = make("div", "figure-analysis-title");
+    headingText.append(
+      make("span", "figure-kind", figure.asset_kind === "table" ? "表格" : "图"),
+      make("h4", "", figure.caption || figure.title || `第 ${figure.page} 页`),
+    );
+    heading.append(headingText, pageJumpButton(figure.page));
     body.append(heading);
     for (const [label, value] of [["看哪里", figure.look_for], ["证明什么", figure.evidence], ["为什么重要", figure.importance]]) {
       const line = make("p");
@@ -1871,8 +1976,16 @@ function activatePair(index, sourceLanguage) {
     segment.classList.toggle("active", Number(segment.dataset.index) === index);
   });
   const targetLanguage = sourceLanguage === "en" ? "zh" : "en";
+  const source = $(`.summary-segment[data-language="${sourceLanguage}"][data-index="${index}"]`);
   const target = $(`.summary-segment[data-language="${targetLanguage}"][data-index="${index}"]`);
-  if (target) target.scrollIntoView({ behavior: "smooth", block: "center" });
+  const targetScroller = target?.closest(".summary-content");
+  if (source && target && targetScroller) {
+    const delta = target.getBoundingClientRect().top - source.getBoundingClientRect().top;
+    targetScroller.scrollTo({
+      top: targetScroller.scrollTop + delta,
+      behavior: "smooth",
+    });
+  }
   const pair = state.currentPaper?.summary_pairs?.[index];
   const label = $("#termLinkLabel");
   $("b", label).textContent = `句对 ${String(index + 1).padStart(2, "0")}`;
@@ -2503,6 +2616,7 @@ function bindEvents() {
   $("#closeWordPopover").addEventListener("click", closeWordPopover);
   $("#highlightSelectionButton").addEventListener("click", () => createPdfAnnotation(false).catch(handleError));
   $("#noteSelectionButton").addEventListener("click", () => createPdfAnnotation(true).catch(handleError));
+  $("#removeSelectionHighlightButton").addEventListener("click", () => removePdfSelectionHighlights().catch(handleError));
   $("#closeAnnotationPopover").addEventListener("click", closeAnnotationPopover);
   $("#saveAnnotationButton").addEventListener("click", () => saveAnnotation().catch(handleError));
   $("#deleteAnnotationButton").addEventListener("click", () => deleteAnnotation().catch(handleError));
