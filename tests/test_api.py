@@ -135,8 +135,11 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(paper["tags"][0]["name"], "Vision")
         status, _, _ = self.request("GET", f"/api/papers/{first_paper_id}")
         self.assertEqual(status, 404)
-        self.assertFalse((self.server.upload_dir / f"{first_paper_id}.pdf").exists())
-        self.assertFalse((self.server.asset_dir / first_paper_id).exists())
+        self.assertTrue((self.server.upload_dir / f"{first_paper_id}.pdf").exists())
+        self.assertTrue((self.server.asset_dir / first_paper_id).exists())
+        status, trash_data, _ = self.request("GET", "/api/trash")
+        self.assertEqual(status, 200)
+        self.assertIn(first_paper_id, {item["id"] for item in trash_data["papers"]})
 
         asset = paper["visual_assets"][0]
         asset_connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -174,6 +177,7 @@ class ApiTestCase(unittest.TestCase):
                 "authors": "Ada Researcher",
                 "publication_year": 2025,
                 "rating": 3,
+                "read_state": "read",
                 "doi": "10.1000/updated",
                 "tag_ids": [tag_id],
                 "summary_pairs": [
@@ -191,6 +195,7 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(updated_data["paper"]["summary_status"], "edited")
         self.assertEqual(updated_data["paper"]["rating"], 3)
+        self.assertEqual(updated_data["paper"]["read_state"], "read")
         self.assertEqual(updated_data["paper"]["summary_model"], "")
         self.assertEqual(updated_data["paper"]["summary_pairs"][0]["terms"][0]["zh"], "检索")
         self.assertEqual(updated_data["paper"]["summary_pairs"][0]["page_refs"], [1])
@@ -363,12 +368,17 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(batch_delete["deleted"], [paper_id])
-        self.assertFalse((self.server.asset_dir / paper_id).exists())
+        self.assertTrue((self.server.asset_dir / paper_id).exists())
         status, vocabulary_list, _ = self.request("GET", "/api/vocabulary")
         self.assertEqual(status, 200)
         self.assertEqual(vocabulary_list["total"], 1)
-        self.assertIsNone(vocabulary_list["entries"][0]["paper_id"])
+        self.assertEqual(vocabulary_list["entries"][0]["paper_id"], paper_id)
         self.assertEqual(vocabulary_list["entries"][0]["paper_title"], "Updated Paper")
+        status, restored, _ = self.request("POST", f"/api/trash/{paper_id}/restore")
+        self.assertEqual(status, 200)
+        self.assertEqual(restored["paper"]["id"], paper_id)
+        status, _, _ = self.request("DELETE", f"/api/papers/{paper_id}")
+        self.assertEqual(status, 200)
         status, _, _ = self.request("DELETE", f"/api/vocabulary/{vocabulary_id}")
         self.assertEqual(status, 200)
         status, list_data, _ = self.request("GET", "/api/papers")
@@ -394,6 +404,7 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(data["settings"]["api_key"], "********")
 
     def test_invalid_upload_metadata_returns_400_without_orphan_file(self) -> None:
+        existing_uploads = set(self.server.upload_dir.glob("*.pdf"))
         writer = PdfWriter()
         writer.add_blank_page(width=595, height=842)
         buffer = io.BytesIO()
@@ -409,7 +420,7 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("year", data["error"].lower())
-        self.assertEqual(list(self.server.upload_dir.glob("*.pdf")), [])
+        self.assertEqual(set(self.server.upload_dir.glob("*.pdf")), existing_uploads)
 
 
 def make_multipart(fields: dict[str, str], filename: str, file_bytes: bytes) -> tuple[bytes, str]:

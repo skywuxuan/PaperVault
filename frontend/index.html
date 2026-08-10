@@ -87,7 +87,7 @@
           <button id="clearSelectionButton" class="text-button" type="button">取消选择</button>
         </div>
         <div class="batch-actions">
-          <button id="batchSummaryButton" class="batch-action-button primary-action" type="button"><span aria-hidden="true">↻</span> 生成摘要</button>
+          <button id="batchQuickReadButton" class="batch-action-button primary-action" type="button"><span aria-hidden="true">↯</span> 速读分析</button>
           <button id="batchTagsButton" class="batch-action-button" type="button"><span aria-hidden="true">#</span> 标签</button>
           <details class="batch-menu">
             <summary class="batch-action-button"><span aria-hidden="true">★</span> 推荐度</summary>
@@ -144,6 +144,15 @@
         <button id="deletePaperButton" class="icon-button danger-icon" type="button" title="删除论文" aria-label="删除论文">&#10005;</button>
       </div>
     </div>
+    <nav class="reader-modebar" aria-label="阅读模式">
+      <div class="reader-mode-tabs" role="tablist" aria-label="论文阅读模式">
+        <button class="active" type="button" role="tab" aria-selected="true" data-reader-mode="quick"><span aria-hidden="true">↯</span> 速读</button>
+        <button type="button" role="tab" aria-selected="false" data-reader-mode="deep"><span aria-hidden="true">文</span> 双语深读</button>
+        <button type="button" role="tab" aria-selected="false" data-reader-mode="ask"><span aria-hidden="true">?</span> 问论文</button>
+        <button type="button" role="tab" aria-selected="false" data-reader-mode="notes"><span aria-hidden="true">✎</span> 笔记</button>
+      </div>
+      <span id="readerTaskSummary" class="reader-task-summary">分析任务就绪</span>
+    </nav>
     <div id="readerGrid" class="reader-grid">
       <section id="pdfPanel" class="reader-panel pdf-panel" data-panel="pdf">
         <div class="panel-header">
@@ -189,6 +198,64 @@
           </div>
         </div>
         <div id="chineseSummary" class="summary-content" lang="zh-CN"></div>
+      </section>
+      <section id="quickPanel" class="reader-panel analysis-panel" data-analysis-panel="quick" aria-labelledby="quickHeading" hidden>
+        <div class="panel-header analysis-panel-header">
+          <div><span class="panel-index quick-index">↯</span><h2 id="quickHeading">速读与关键图表</h2></div>
+          <span id="quickPanelStatus" class="status-pill">尚未分析</span>
+        </div>
+        <div class="analysis-scroll">
+          <section class="analysis-block">
+            <div class="analysis-block-heading">
+              <div><p class="analysis-kicker">QUICK READ</p><h3>论文速读</h3></div>
+              <div class="analysis-actions">
+                <select id="quickRunSelect" class="analysis-version-select" aria-label="速读历史版本" hidden></select>
+                <button id="quickReadButton" class="secondary-button compact-analysis-button" type="button"><span aria-hidden="true">↻</span> 生成速读</button>
+              </div>
+            </div>
+            <div id="quickJobStatus" class="analysis-job-status" hidden></div>
+            <div id="quickReadContent" class="analysis-content"><p class="analysis-empty">尚未生成速读分析。</p></div>
+          </section>
+          <section class="analysis-block figure-analysis-block">
+            <div class="analysis-block-heading">
+              <div><p class="analysis-kicker">KEY FIGURES</p><h3>关键图表</h3></div>
+              <div class="analysis-actions">
+                <select id="figureRunSelect" class="analysis-version-select" aria-label="图表分析历史版本" hidden></select>
+                <button id="figureAnalysisButton" class="secondary-button compact-analysis-button" type="button"><span aria-hidden="true">▧</span> 分析图表</button>
+              </div>
+            </div>
+            <div id="figureJobStatus" class="analysis-job-status" hidden></div>
+            <div id="figureAnalysisContent" class="analysis-content"><p class="analysis-empty">尚未生成关键图表分析。</p></div>
+          </section>
+        </div>
+      </section>
+      <section id="askPanel" class="reader-panel analysis-panel" data-analysis-panel="ask" aria-labelledby="askHeading" hidden>
+        <div class="panel-header analysis-panel-header">
+          <div><span class="panel-index ask-index">?</span><h2 id="askHeading">带引用问答</h2></div>
+          <span id="qaAvailability" class="status-pill">检索约束</span>
+        </div>
+        <form id="qaForm" class="qa-form">
+          <select id="qaScope" aria-label="问答范围">
+            <option value="paper">当前论文</option>
+            <option value="library">全部论文</option>
+          </select>
+          <textarea id="qaQuestion" rows="2" maxlength="2000" required placeholder="输入要核对的问题"></textarea>
+          <button id="qaSubmitButton" class="primary-button" type="submit" title="提交问题" aria-label="提交问题">→</button>
+        </form>
+        <div class="qa-workspace">
+          <div id="qaAnswer" class="qa-answer"><p class="analysis-empty">回答只会使用本地检索到的论文原文。</p></div>
+          <aside class="qa-sources" aria-label="回答来源">
+            <div class="qa-sources-heading"><strong>来源</strong><span id="qaSourceCount">0</span></div>
+            <div id="qaSourceList" class="qa-source-list"><p class="analysis-empty">提交问题后显示引用页。</p></div>
+          </aside>
+        </div>
+      </section>
+      <section id="notesPanel" class="reader-panel analysis-panel" data-analysis-panel="notes" aria-labelledby="notesHeading" hidden>
+        <div class="panel-header analysis-panel-header">
+          <div><span class="panel-index notes-index">✎</span><h2 id="notesHeading">高亮与笔记</h2></div>
+          <span id="notesCount" class="status-pill">0 条</span>
+        </div>
+        <div id="notesList" class="notes-list"><p class="analysis-empty">当前论文还没有高亮或笔记。</p></div>
       </section>
     </div>
   </main>

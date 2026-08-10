@@ -6,9 +6,10 @@ import json
 import mimetypes
 import os
 import re
-import shutil
 import sqlite3
 import sys
+import threading
+import time
 import unicodedata
 import uuid
 from email.parser import BytesParser
@@ -20,12 +21,24 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
+from .analysis import (
+    FIGURE_ANALYSIS_PROMPT_VERSION,
+    QA_PROMPT_VERSION,
+    QUICK_READ_PROMPT_VERSION,
+    analysis_input_hash,
+    answer_with_citations,
+    build_text_chunks,
+    generate_figure_analysis,
+    generate_quick_read,
+    provider_available,
+)
 from .database import Database, utc_now
 from .llm import SummaryError, generate_summary, translate_english
 from .offline_translation import OfflineTranslationError, translate_english_offline
 from .pronunciation import american_ipa
 from .pdf_parser import (
     extract_pdf,
+    extract_page_texts,
     extract_preview_words,
     extract_visual_pages,
     infer_title,
@@ -42,6 +55,13 @@ PAPER_ASSET_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/assets/(page-[0-9]+\.png
 PAPER_PAGE_IMAGE_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)\.png$")
 PAPER_PAGE_TEXT_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)/text$")
 PAPER_SUMMARY_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/generate-summary$")
+PAPER_ANALYSES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/analyses$")
+PAPER_ANALYSIS_CREATE_RE = re.compile(
+    r"^/api/papers/([0-9a-f-]+)/analyses/(quick-read|figure-analysis)$"
+)
+ANALYSIS_JOB_RE = re.compile(r"^/api/analysis-jobs/([0-9a-f-]+)$")
+ANALYSIS_JOB_RETRY_RE = re.compile(r"^/api/analysis-jobs/([0-9a-f-]+)/retry$")
+TRASH_RESTORE_RE = re.compile(r"^/api/trash/([0-9a-f-]+)/restore$")
 TAG_ROUTE_RE = re.compile(r"^/api/tags/([0-9a-f-]+)$")
 VOCABULARY_ROUTE_RE = re.compile(r"^/api/vocabulary/([0-9a-f-]+)$")
 PAPER_ANNOTATIONS_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/annotations$")
@@ -64,7 +84,165 @@ class PaperVaultServer(ThreadingHTTPServer):
         self.db = Database(self.data_dir / "paper-vault.db")
         self.db.initialize()
         self.deduplicate_library()
+        self._job_stop = threading.Event()
+        self._job_wakeup = threading.Event()
+        self._job_thread: threading.Thread | None = None
         super().__init__(address, PaperVaultHandler)
+
+    def serve_forever(self, poll_interval: float = 0.5) -> None:
+        self.start_job_worker()
+        try:
+            super().serve_forever(poll_interval=poll_interval)
+        finally:
+            self.stop_job_worker()
+
+    def server_close(self) -> None:
+        self.stop_job_worker()
+        super().server_close()
+
+    def start_job_worker(self) -> None:
+        if self._job_thread is not None and self._job_thread.is_alive():
+            return
+        self._job_stop.clear()
+        self._job_thread = threading.Thread(
+            target=self._job_loop,
+            name="papervault-analysis",
+            daemon=True,
+        )
+        self._job_thread.start()
+
+    def stop_job_worker(self) -> None:
+        self._job_stop.set()
+        self._job_wakeup.set()
+        if (
+            self._job_thread is not None
+            and self._job_thread.is_alive()
+            and threading.current_thread() is not self._job_thread
+        ):
+            self._job_thread.join(timeout=5)
+
+    def notify_job_worker(self) -> None:
+        self._job_wakeup.set()
+
+    def _job_loop(self) -> None:
+        while not self._job_stop.is_set():
+            job = self.db.claim_next_analysis_job()
+            if job is None:
+                self._job_wakeup.wait(0.5)
+                self._job_wakeup.clear()
+                continue
+            self.execute_analysis_job(job)
+
+    def execute_analysis_job(self, job: dict[str, Any]) -> None:
+        started = time.perf_counter()
+        paper_id = str(job.get("paper_id") or "")
+        prompt_version = str(job.get("prompt_version") or "")
+        input_hash = str(job.get("input_hash") or "")
+        settings = self.db.get_settings(include_secret=True)
+        try:
+            paper = self.db.get_paper(paper_id, include_text=True)
+            if paper is None:
+                raise SummaryError("Paper is unavailable or in the recycle bin")
+            if job["job_type"] == "figure_analysis":
+                self.ensure_visual_assets(paper_id)
+                paper = self.db.get_paper(paper_id, include_text=True) or paper
+            chunks = self.ensure_text_index(paper_id)
+            input_hash = analysis_input_hash(paper, job["job_type"], self.asset_dir)
+            if job["job_type"] == "quick_read":
+                content, provider, token_count = generate_quick_read(paper, chunks, settings)
+            elif job["job_type"] == "figure_analysis":
+                content, provider, token_count = generate_figure_analysis(paper, chunks, settings)
+            else:
+                raise SummaryError("Unsupported analysis job type")
+            duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+            run_id = str(uuid.uuid4())
+            self.db.create_analysis_run(
+                {
+                    "id": run_id,
+                    "paper_id": paper_id,
+                    "analysis_type": job["job_type"],
+                    "status": "succeeded",
+                    "content": content,
+                    "provider": provider,
+                    "model": settings.get("model", "") if provider == "openai_compatible" else "",
+                    "input_hash": input_hash,
+                    "prompt_version": prompt_version,
+                    "token_count": token_count,
+                    "duration_ms": duration_ms,
+                }
+            )
+            self.db.complete_analysis_job(job["id"], run_id, token_count, duration_ms)
+        except Exception as exc:
+            duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+            message = friendly_model_error(str(exc))[0] if isinstance(exc, SummaryError) else str(exc)
+            if paper_id and self.db.get_paper(paper_id) is not None:
+                self.db.create_analysis_run(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "paper_id": paper_id,
+                        "analysis_type": job["job_type"],
+                        "status": "failed",
+                        "content": {},
+                        "provider": str(job.get("provider") or ""),
+                        "model": str(job.get("model") or ""),
+                        "input_hash": input_hash,
+                        "prompt_version": prompt_version,
+                        "duration_ms": duration_ms,
+                        "error": message,
+                    }
+                )
+            self.db.fail_analysis_job(job["id"], message, duration_ms)
+
+    def ensure_text_index(self, paper_id: str) -> list[dict[str, Any]]:
+        if self.db.has_paper_chunks(paper_id):
+            return self.db.list_paper_chunks(paper_id)
+        paper = self.db.get_paper(paper_id, include_text=True)
+        if paper is None:
+            return []
+        pdf_path = self.upload_dir / paper["stored_filename"]
+        try:
+            page_texts = extract_page_texts(pdf_path)
+        except Exception:
+            page_texts = [{"page": 1, "text": paper.get("extracted_text", "")}]
+        chunks = build_text_chunks(paper_id, page_texts)
+        self.db.replace_paper_chunks(paper_id, chunks)
+        return self.db.list_paper_chunks(paper_id)
+
+    def queue_analysis_job(
+        self, paper_id: str, job_type: str
+    ) -> tuple[dict[str, Any] | None, bool]:
+        paper = self.db.get_paper(paper_id, include_text=True)
+        if paper is None:
+            return None, False
+        active = self.db.list_analysis_jobs(
+            paper_id, statuses=("queued", "running"), limit=100
+        )
+        existing = next((job for job in active if job["job_type"] == job_type), None)
+        if existing is not None:
+            return existing, False
+        if job_type == "figure_analysis":
+            self.ensure_visual_assets(paper_id)
+            paper = self.db.get_paper(paper_id, include_text=True) or paper
+        settings = self.db.get_settings(include_secret=True)
+        prompt_version = (
+            QUICK_READ_PROMPT_VERSION
+            if job_type == "quick_read"
+            else FIGURE_ANALYSIS_PROMPT_VERSION
+        )
+        job = self.db.create_analysis_job(
+            {
+                "id": str(uuid.uuid4()),
+                "paper_id": paper_id,
+                "job_type": job_type,
+                "provider": settings.get("provider", "local"),
+                "model": settings.get("model", "") if provider_available(settings) else "",
+                "input_hash": analysis_input_hash(paper, job_type, self.asset_dir),
+                "prompt_version": prompt_version,
+                "payload": {},
+            }
+        )
+        self.notify_job_worker()
+        return job, True
 
     def ensure_visual_assets(self, paper_id: str) -> dict[str, Any] | None:
         paper = self.db.get_paper(paper_id)
@@ -83,11 +261,7 @@ class PaperVaultServer(ThreadingHTTPServer):
 
     def remove_paper_record(self, paper_id: str) -> bool:
         stored_filename = self.db.delete_paper(paper_id)
-        if stored_filename is None:
-            return False
-        (self.upload_dir / stored_filename).unlink(missing_ok=True)
-        shutil.rmtree(self.asset_dir / paper_id, ignore_errors=True)
-        return True
+        return stored_filename is not None
 
     def consolidate_paper_duplicates(self, paper_id: str) -> tuple[dict[str, Any] | None, int]:
         imported = self.db.get_paper(paper_id)
@@ -153,6 +327,47 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 {"papers": papers, "total": len(papers), "facets": self.server.db.library_facets()}
             )
             return
+        if path == "/api/analysis-jobs":
+            query = parse_qs(parsed.query)
+            paper_id = query.get("paper_id", [""])[0] or None
+            statuses = tuple(
+                status
+                for status in query.get("status", [""])[0].split(",")
+                if status in {"queued", "running", "succeeded", "failed"}
+            )
+            jobs = self.server.db.list_analysis_jobs(paper_id, statuses=statuses)
+            self.send_json({"jobs": jobs, "total": len(jobs)})
+            return
+        match = ANALYSIS_JOB_RE.match(path)
+        if match:
+            job = self.server.db.get_analysis_job(match.group(1))
+            if job is None:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Analysis job not found")
+                return
+            self.send_json({"job": job})
+            return
+        if path == "/api/trash":
+            papers = self.server.db.list_trash()
+            self.send_json({"papers": papers, "total": len(papers)})
+            return
+        if path == "/api/search/chunks":
+            query = parse_qs(parsed.query)
+            term = query.get("q", [""])[0].strip()
+            paper_id = query.get("paper_id", [""])[0].strip() or None
+            if not term:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Search query is required")
+                return
+            if paper_id:
+                if self.server.db.get_paper(paper_id) is None:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                    return
+                self.server.ensure_text_index(paper_id)
+            else:
+                for paper in self.server.db.list_papers():
+                    self.server.ensure_text_index(paper["id"])
+            chunks = self.server.db.search_paper_chunks(term, paper_id, limit=20)
+            self.send_json({"chunks": self.chunk_sources(chunks), "total": len(chunks)})
+            return
         match = PAPER_FILE_RE.match(path)
         if match:
             self.serve_pdf(match.group(1))
@@ -176,6 +391,20 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 return
             annotations = self.server.db.list_annotations(match.group(1))
             self.send_json({"annotations": annotations})
+            return
+        match = PAPER_ANALYSES_RE.match(path)
+        if match:
+            paper_id = match.group(1)
+            if self.server.db.get_paper(paper_id) is None:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            runs = self.server.db.list_analysis_runs(paper_id)
+            jobs = self.server.db.list_analysis_jobs(paper_id, limit=100)
+            latest: dict[str, dict[str, Any]] = {}
+            for run in runs:
+                if run["status"] == "succeeded":
+                    latest.setdefault(str(run["analysis_type"]), run)
+            self.send_json({"runs": runs, "jobs": jobs, "latest": latest})
             return
         match = PAPER_ROUTE_RE.match(path)
         if match:
@@ -207,6 +436,29 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/papers/batch":
             self.batch_papers()
+            return
+        if path == "/api/analysis-jobs/batch":
+            self.batch_analysis_jobs()
+            return
+        if path == "/api/qa":
+            self.answer_question()
+            return
+        match = PAPER_ANALYSIS_CREATE_RE.match(path)
+        if match:
+            job_type = "quick_read" if match.group(2) == "quick-read" else "figure_analysis"
+            self.create_analysis_job(match.group(1), job_type)
+            return
+        match = ANALYSIS_JOB_RETRY_RE.match(path)
+        if match:
+            self.retry_analysis_job(match.group(1))
+            return
+        match = TRASH_RESTORE_RE.match(path)
+        if match:
+            paper = self.server.db.restore_paper(match.group(1))
+            if paper is None:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Trashed paper not found")
+                return
+            self.send_json({"paper": paper})
             return
         match = PAPER_SUMMARY_RE.match(path)
         if match:
@@ -281,6 +533,154 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             self.send_json({"deleted": True})
             return
         self.send_error_json(HTTPStatus.NOT_FOUND, "API route not found")
+
+    def create_analysis_job(self, paper_id: str, job_type: str) -> None:
+        job, created = self.server.queue_analysis_job(paper_id, job_type)
+        if job is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        self.send_json(
+            {"job": job, "created": created},
+            HTTPStatus.ACCEPTED if created else HTTPStatus.OK,
+        )
+
+    def batch_analysis_jobs(self) -> None:
+        try:
+            payload = self.read_json()
+            raw_ids = payload.get("paper_ids")
+            if not isinstance(raw_ids, list):
+                raise ValueError("paper_ids must be a list")
+            paper_ids = list(dict.fromkeys(str(value) for value in raw_ids if value))
+            if not paper_ids or len(paper_ids) > 500:
+                raise ValueError("Select between 1 and 500 papers")
+            job_type = str(payload.get("job_type", ""))
+            if job_type not in {"quick_read", "figure_analysis"}:
+                raise ValueError("Invalid analysis job type")
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        jobs = []
+        missing = []
+        created_count = 0
+        for paper_id in paper_ids:
+            job, created = self.server.queue_analysis_job(paper_id, job_type)
+            if job is None:
+                missing.append(paper_id)
+            else:
+                jobs.append(job)
+                created_count += int(created)
+        self.send_json(
+            {
+                "jobs": jobs,
+                "queued_count": created_count,
+                "existing_count": len(jobs) - created_count,
+                "missing": missing,
+            },
+            HTTPStatus.ACCEPTED,
+        )
+
+    def retry_analysis_job(self, job_id: str) -> None:
+        job = self.server.db.retry_analysis_job(job_id)
+        if job is None:
+            self.send_error_json(
+                HTTPStatus.CONFLICT,
+                "Only failed jobs below the retry limit can be retried",
+            )
+            return
+        self.server.notify_job_worker()
+        self.send_json({"job": job}, HTTPStatus.ACCEPTED)
+
+    def answer_question(self) -> None:
+        try:
+            payload = self.read_json()
+            question = required_text(payload.get("question"), "Question", 2000)
+            scope = str(payload.get("scope", "paper"))
+            paper_id = str(payload.get("paper_id", "")).strip() or None
+            if scope not in {"paper", "library"}:
+                raise ValueError("Invalid question scope")
+            if scope == "paper" and not paper_id:
+                raise ValueError("paper_id is required for paper questions")
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        settings = self.server.db.get_settings(include_secret=True)
+        if not provider_available(settings):
+            self.send_json(
+                {
+                    "error": "请先在模型设置中配置 OpenAI-compatible 服务后再使用论文问答。",
+                    "error_code": "qa_unavailable",
+                },
+                HTTPStatus.CONFLICT,
+            )
+            return
+        if scope == "paper":
+            if self.server.db.get_paper(str(paper_id)) is None:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            self.server.ensure_text_index(str(paper_id))
+        else:
+            for paper in self.server.db.list_papers():
+                self.server.ensure_text_index(paper["id"])
+        chunks = self.server.db.search_paper_chunks(
+            question, str(paper_id) if scope == "paper" else None, limit=8
+        )
+        if not chunks:
+            self.send_json(
+                {
+                    "error": "没有检索到足以回答该问题的论文内容。",
+                    "error_code": "no_retrieval_context",
+                },
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+            return
+        try:
+            answer, citation_ids, token_count = answer_with_citations(
+                question, chunks, settings
+            )
+        except SummaryError as exc:
+            message, error_code = friendly_model_error(str(exc))
+            self.send_json(
+                {"error": message, "error_code": error_code},
+                HTTPStatus.BAD_GATEWAY,
+            )
+            return
+        sources = self.chunk_sources(chunks)
+        source_by_id = {
+            f"S{index}": {**source, "id": f"S{index}"}
+            for index, source in enumerate(sources, start=1)
+        }
+        cited_sources = [source_by_id[value] for value in citation_ids if value in source_by_id]
+        self.send_json(
+            {
+                "answer": answer,
+                "sources": cited_sources,
+                "scope": scope,
+                "model": settings.get("model", ""),
+                "prompt_version": QA_PROMPT_VERSION,
+                "token_count": token_count,
+            }
+        )
+
+    def chunk_sources(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        papers: dict[str, dict[str, Any] | None] = {}
+        sources = []
+        for chunk in chunks:
+            paper_id = str(chunk.get("paper_id", ""))
+            if paper_id not in papers:
+                papers[paper_id] = self.server.db.get_paper(paper_id)
+            paper = papers[paper_id]
+            sources.append(
+                {
+                    "chunk_id": chunk.get("id"),
+                    "paper_id": paper_id,
+                    "paper_title": paper.get("title", "") if paper else "",
+                    "page": int(chunk.get("page", 1)),
+                    "section": str(chunk.get("section", "")),
+                    "excerpt": str(chunk.get("content", ""))[:700],
+                    "content_hash": str(chunk.get("content_hash", "")),
+                }
+            )
+        return sources
 
     def create_paper(self) -> None:
         try:
@@ -382,6 +782,11 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 fields["publication_year"] = parse_year(payload["publication_year"])
             if "rating" in payload:
                 fields["rating"] = parse_rating(payload["rating"])
+            if "read_state" in payload:
+                read_state = str(payload["read_state"])
+                if read_state not in {"read", "unread"}:
+                    raise ValueError("Invalid read state")
+                fields["read_state"] = read_state
             if "summary_pairs" in payload:
                 fields["summary_pairs"] = validate_pairs(payload["summary_pairs"])
                 fields["summary_status"] = "edited"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -8,9 +9,17 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
+SCHEMA_VERSION = 2
+
+
 SCHEMA = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS papers (
     id TEXT PRIMARY KEY,
@@ -30,6 +39,8 @@ CREATE TABLE IF NOT EXISTS papers (
     summary_model TEXT NOT NULL DEFAULT '',
     summary_error TEXT NOT NULL DEFAULT '',
     rating INTEGER NOT NULL DEFAULT 0 CHECK(rating BETWEEN 0 AND 3),
+    read_state TEXT NOT NULL DEFAULT 'unread' CHECK(read_state IN ('unread', 'read')),
+    deleted_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -93,11 +104,65 @@ CREATE TABLE IF NOT EXISTS paper_annotations (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    analysis_type TEXT NOT NULL CHECK(analysis_type IN ('quick_read', 'figure_analysis')),
+    status TEXT NOT NULL CHECK(status IN ('succeeded', 'failed')),
+    content_json TEXT NOT NULL DEFAULT '{}',
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    input_hash TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    token_count INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS analysis_jobs (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+    job_type TEXT NOT NULL CHECK(job_type IN ('quick_read', 'figure_analysis')),
+    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'failed')),
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    result_run_id TEXT REFERENCES analysis_runs(id) ON DELETE SET NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    error TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    input_hash TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    token_count INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS paper_chunks (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    page INTEGER NOT NULL,
+    section TEXT NOT NULL DEFAULT '',
+    ordinal INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(paper_id, page, ordinal)
+);
+
 CREATE INDEX IF NOT EXISTS idx_papers_created_at ON papers(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_tags_tag_id ON paper_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_vocabulary_updated_at ON vocabulary_entries(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vocabulary_status ON vocabulary_entries(status);
 CREATE INDEX IF NOT EXISTS idx_annotations_paper_page ON paper_annotations(paper_id, page);
+CREATE INDEX IF NOT EXISTS idx_analysis_runs_paper_type ON analysis_runs(paper_id, analysis_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_created ON analysis_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_analysis_jobs_paper_type ON analysis_jobs(paper_id, job_type, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_chunks_paper_page ON paper_chunks(paper_id, page, ordinal);
 """
 
 
@@ -135,6 +200,11 @@ class Database:
 
     def initialize(self) -> None:
         with self.connect() as connection:
+            existing_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if existing_version > SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database schema version {existing_version} is newer than supported version {SCHEMA_VERSION}"
+                )
             connection.executescript(SCHEMA)
             columns = {
                 str(row["name"])
@@ -152,6 +222,48 @@ class Database:
                 connection.execute(
                     "ALTER TABLE papers ADD COLUMN rating INTEGER NOT NULL DEFAULT 0"
                 )
+            if "read_state" not in columns:
+                connection.execute(
+                    "ALTER TABLE papers ADD COLUMN read_state TEXT NOT NULL DEFAULT 'unread'"
+                )
+            if "deleted_at" not in columns:
+                connection.execute("ALTER TABLE papers ADD COLUMN deleted_at TEXT")
+            try:
+                connection.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS paper_chunks_fts USING fts5(
+                        chunk_id UNINDEXED,
+                        paper_id UNINDEXED,
+                        content,
+                        tokenize='unicode61'
+                    )
+                    """
+                )
+            except sqlite3.OperationalError:
+                pass
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (SCHEMA_VERSION, utc_now()),
+            )
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            connection.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'queued', error = 'Recovered after application restart',
+                    updated_at = ?, started_at = NULL
+                WHERE status = 'running' AND attempts < max_attempts
+                """,
+                (utc_now(),),
+            )
+            connection.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'failed', error = 'Retry limit reached after application restart',
+                    updated_at = ?, finished_at = ?
+                WHERE status = 'running' AND attempts >= max_attempts
+                """,
+                (utc_now(), utc_now()),
+            )
             from .pdf_parser import infer_publication_year
             for row in connection.execute(
                 """
@@ -237,9 +349,10 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT t.id, t.name, t.color, COUNT(pt.paper_id) AS paper_count
+                SELECT t.id, t.name, t.color, COUNT(p.id) AS paper_count
                 FROM tags t
                 LEFT JOIN paper_tags pt ON pt.tag_id = t.id
+                LEFT JOIN papers p ON p.id = pt.paper_id AND p.deleted_at IS NULL
                 GROUP BY t.id
                 ORDER BY t.name COLLATE NOCASE
                 """
@@ -278,7 +391,7 @@ class Database:
         summary_filter: str = "",
         rating_filter: str = "",
     ) -> list[dict[str, Any]]:
-        clauses: list[str] = []
+        clauses: list[str] = ["p.deleted_at IS NULL"]
         params: list[Any] = []
         if query:
             term = f"%{query.strip()}%"
@@ -330,10 +443,10 @@ class Database:
     def library_facets(self) -> dict[str, Any]:
         with self.connect() as connection:
             status_rows = connection.execute(
-                "SELECT summary_status, COUNT(*) AS count FROM papers GROUP BY summary_status"
+                "SELECT summary_status, COUNT(*) AS count FROM papers WHERE deleted_at IS NULL GROUP BY summary_status"
             ).fetchall()
             rating_rows = connection.execute(
-                "SELECT rating, COUNT(*) AS count FROM papers GROUP BY rating"
+                "SELECT rating, COUNT(*) AS count FROM papers WHERE deleted_at IS NULL GROUP BY rating"
             ).fetchall()
         raw_status = {str(row["summary_status"]): int(row["count"]) for row in status_rows}
         ratings = {str(value): 0 for value in range(4)}
@@ -350,7 +463,9 @@ class Database:
 
     def get_paper(self, paper_id: str, include_text: bool = False) -> dict[str, Any] | None:
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM papers WHERE id = ? AND deleted_at IS NULL", (paper_id,)
+            ).fetchone()
             if row is None:
                 return None
             return self._paper_dict(connection, row, include_text=include_text)
@@ -387,7 +502,7 @@ class Database:
         return result
 
     def update_paper(self, paper_id: str, fields: dict[str, Any], tag_ids: list[str] | None) -> dict[str, Any] | None:
-        allowed = {"title", "authors", "publication_year", "doi", "rating", "summary_pairs", "visual_assets", "summary_status", "summary_provider", "summary_model", "summary_error"}
+        allowed = {"title", "authors", "publication_year", "doi", "rating", "read_state", "summary_pairs", "visual_assets", "summary_status", "summary_provider", "summary_model", "summary_error"}
         updates: list[str] = []
         values: list[Any] = []
         for key, value in fields.items():
@@ -404,7 +519,7 @@ class Database:
         values.append(paper_id)
         with self.connect() as connection:
             cursor = connection.execute(
-                f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
+                f"UPDATE papers SET {', '.join(updates)} WHERE id = ? AND deleted_at IS NULL",
                 values,
             )
             if cursor.rowcount == 0:
@@ -416,12 +531,287 @@ class Database:
     def delete_paper(self, paper_id: str) -> str | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT stored_filename FROM papers WHERE id = ?", (paper_id,)
+                "SELECT stored_filename FROM papers WHERE id = ? AND deleted_at IS NULL",
+                (paper_id,),
             ).fetchone()
             if row is None:
                 return None
-            connection.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
+            connection.execute(
+                "UPDATE papers SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                (utc_now(), utc_now(), paper_id),
+            )
             return str(row["stored_filename"])
+
+    def list_trash(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM papers WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+            ).fetchall()
+            return [self._paper_dict(connection, row) for row in rows]
+
+    def restore_paper(self, paper_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE papers SET deleted_at = NULL, updated_at = ?
+                WHERE id = ? AND deleted_at IS NOT NULL
+                """,
+                (utc_now(), paper_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_paper(paper_id)
+
+    def replace_paper_chunks(self, paper_id: str, chunks: list[dict[str, Any]]) -> None:
+        now = utc_now()
+        with self.connect() as connection:
+            try:
+                connection.execute("DELETE FROM paper_chunks_fts WHERE paper_id = ?", (paper_id,))
+            except sqlite3.OperationalError:
+                pass
+            connection.execute("DELETE FROM paper_chunks WHERE paper_id = ?", (paper_id,))
+            for chunk in chunks:
+                connection.execute(
+                    """
+                    INSERT INTO paper_chunks(
+                        id, paper_id, page, section, ordinal, content, content_hash, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        chunk["id"], paper_id, chunk["page"], chunk.get("section", ""),
+                        chunk["ordinal"], chunk["content"], chunk["content_hash"], now,
+                    ),
+                )
+                try:
+                    connection.execute(
+                        "INSERT INTO paper_chunks_fts(chunk_id, paper_id, content) VALUES (?, ?, ?)",
+                        (chunk["id"], paper_id, chunk["content"]),
+                    )
+                except sqlite3.OperationalError:
+                    pass
+
+    def list_paper_chunks(self, paper_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM paper_chunks WHERE paper_id = ?
+                ORDER BY page, ordinal
+                """,
+                (paper_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def has_paper_chunks(self, paper_id: str) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM paper_chunks WHERE paper_id = ? LIMIT 1", (paper_id,)
+            ).fetchone()
+        return row is not None
+
+    def search_paper_chunks(
+        self, query: str, paper_id: str | None = None, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        tokens = [token for token in re.findall(r"[\w\u4e00-\u9fff]+", query) if len(token) > 1]
+        rows: list[sqlite3.Row] = []
+        with self.connect() as connection:
+            if tokens:
+                safe_tokens = [token.replace('"', "") for token in tokens[:12]]
+                match_query = " OR ".join(f'"{token}"' for token in safe_tokens)
+                try:
+                    sql = """
+                        SELECT c.*, bm25(paper_chunks_fts) AS score
+                        FROM paper_chunks_fts
+                        JOIN paper_chunks c ON c.id = paper_chunks_fts.chunk_id
+                        JOIN papers p ON p.id = c.paper_id
+                        WHERE paper_chunks_fts MATCH ? AND p.deleted_at IS NULL
+                    """
+                    params: list[Any] = [match_query]
+                    if paper_id:
+                        sql += " AND c.paper_id = ?"
+                        params.append(paper_id)
+                    sql += " ORDER BY score LIMIT ?"
+                    params.append(max(1, min(limit, 30)))
+                    rows = connection.execute(sql, params).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
+            if not rows:
+                sql = """
+                    SELECT c.*, 0.0 AS score FROM paper_chunks c
+                    JOIN papers p ON p.id = c.paper_id
+                    WHERE c.content LIKE ? AND p.deleted_at IS NULL
+                """
+                params = [f"%{query.strip()}%"]
+                if paper_id:
+                    sql += " AND c.paper_id = ?"
+                    params.append(paper_id)
+                sql += " ORDER BY page, ordinal LIMIT ?"
+                params.append(max(1, min(limit, 30)))
+                rows = connection.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_analysis_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO analysis_jobs(
+                    id, paper_id, job_type, status, payload_json, attempts, max_attempts,
+                    provider, model, input_hash, prompt_version, created_at, updated_at
+                ) VALUES (?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job["id"], job.get("paper_id"), job["job_type"],
+                    json.dumps(job.get("payload", {}), ensure_ascii=False),
+                    job.get("max_attempts", 3), job.get("provider", ""),
+                    job.get("model", ""), job.get("input_hash", ""),
+                    job.get("prompt_version", ""), now, now,
+                ),
+            )
+        result = self.get_analysis_job(job["id"])
+        assert result is not None
+        return result
+
+    def get_analysis_job(self, job_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM analysis_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        return self._job_dict(row) if row is not None else None
+
+    def list_analysis_jobs(
+        self, paper_id: str | None = None, statuses: tuple[str, ...] = (), limit: int = 100
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if paper_id:
+            clauses.append("paper_id = ?")
+            params.append(paper_id)
+        if statuses:
+            clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+            params.extend(statuses)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(limit, 500)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM analysis_jobs {where} ORDER BY created_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._job_dict(row) for row in rows]
+
+    def claim_next_analysis_job(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM analysis_jobs
+                WHERE status = 'queued' AND attempts < max_attempts
+                ORDER BY created_at LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            now = utc_now()
+            connection.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'running', attempts = attempts + 1, error = '',
+                    started_at = ?, finished_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, row["id"]),
+            )
+            claimed = connection.execute(
+                "SELECT * FROM analysis_jobs WHERE id = ?", (row["id"],)
+            ).fetchone()
+        return self._job_dict(claimed) if claimed is not None else None
+
+    def complete_analysis_job(
+        self, job_id: str, run_id: str, token_count: int, duration_ms: int
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'succeeded', result_run_id = ?, token_count = ?,
+                    duration_ms = ?, error = '', finished_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (run_id, token_count, duration_ms, now, now, job_id),
+            )
+        return self.get_analysis_job(job_id)
+
+    def fail_analysis_job(
+        self, job_id: str, error: str, duration_ms: int
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'failed', error = ?, duration_ms = ?,
+                    finished_at = ?, updated_at = ? WHERE id = ?
+                """,
+                (error[:2000], duration_ms, now, now, job_id),
+            )
+        return self.get_analysis_job(job_id)
+
+    def retry_analysis_job(self, job_id: str) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'queued', error = '', finished_at = NULL, updated_at = ?
+                WHERE id = ? AND status = 'failed' AND attempts < max_attempts
+                """,
+                (now, job_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_analysis_job(job_id)
+
+    def create_analysis_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO analysis_runs(
+                    id, paper_id, analysis_type, status, content_json, provider, model,
+                    input_hash, prompt_version, token_count, duration_ms, error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run["id"], run["paper_id"], run["analysis_type"], run["status"],
+                    json.dumps(run.get("content", {}), ensure_ascii=False),
+                    run.get("provider", ""), run.get("model", ""), run["input_hash"],
+                    run["prompt_version"], run.get("token_count", 0),
+                    run.get("duration_ms", 0), run.get("error", ""),
+                    run.get("created_at", utc_now()),
+                ),
+            )
+        result = self.get_analysis_run(run["id"])
+        assert result is not None
+        return result
+
+    def get_analysis_run(self, run_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM analysis_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        return self._run_dict(row) if row is not None else None
+
+    def list_analysis_runs(
+        self, paper_id: str, analysis_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM analysis_runs WHERE paper_id = ?"
+        params: list[Any] = [paper_id]
+        if analysis_type:
+            sql += " AND analysis_type = ?"
+            params.append(analysis_type)
+        sql += " ORDER BY created_at DESC"
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [self._run_dict(row) for row in rows]
 
     def list_annotations(self, paper_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -636,6 +1026,26 @@ class Database:
         return self.get_settings()
 
     @staticmethod
+    def _job_dict(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        try:
+            data["payload"] = json.loads(data.pop("payload_json") or "{}")
+        except json.JSONDecodeError:
+            data["payload"] = {}
+            data.pop("payload_json", None)
+        return data
+
+    @staticmethod
+    def _run_dict(row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        try:
+            data["content"] = json.loads(data.pop("content_json") or "{}")
+        except json.JSONDecodeError:
+            data["content"] = {}
+            data.pop("content_json", None)
+        return data
+
+    @staticmethod
     def _replace_paper_tags(connection: sqlite3.Connection, paper_id: str, tag_ids: list[str]) -> None:
         connection.execute("DELETE FROM paper_tags WHERE paper_id = ?", (paper_id,))
         connection.executemany(
@@ -666,6 +1076,19 @@ class Database:
             (row["id"],),
         ).fetchall()
         data["tags"] = [dict(tag) for tag in tags]
+        job_rows = connection.execute(
+            """
+            SELECT * FROM analysis_jobs
+            WHERE paper_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (row["id"],),
+        ).fetchall()
+        latest_jobs: dict[str, dict[str, Any]] = {}
+        for job_row in job_rows:
+            job = Database._job_dict(job_row)
+            latest_jobs.setdefault(str(job["job_type"]), job)
+        data["analysis_jobs"] = latest_jobs
         data["text_length"] = len(data.get("extracted_text", ""))
         if not include_text:
             data.pop("extracted_text", None)

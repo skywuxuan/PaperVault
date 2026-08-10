@@ -19,7 +19,7 @@ Windows desktop development startup:
 Desktop health response:
 
 ```json
-{"status":"ok","version":"1.9.1"}
+{"status":"ok","version":"2.0.0"}
 ```
 
 The desktop shell chooses an ephemeral localhost port. The legacy browser mode
@@ -71,7 +71,7 @@ data/
   models/              Offline translation models
 ```
 
-The active four-paper development library is now located at:
+The active development library is located at:
 
 ```text
 C:\Users\skywu\Documents\Codex\PaperVault\data
@@ -93,7 +93,7 @@ The packaged Windows desktop app still defaults to `%LOCALAPPDATA%\PaperVault`
 when no override is configured. This workstation has a machine-local
 `%LOCALAPPDATA%\PaperVault\desktop.json` pointing to the active project
 library, so directly opening the packaged executable and source desktop startup
-both use the same four-paper library. The file contains no credentials and is
+both use the same active library. The file contains no credentials and is
 not tracked by Git. An explicit source launch remains available:
 
 ```powershell
@@ -128,30 +128,18 @@ api_key: stored locally, masked by API
 
 ## 5. Current Library State
 
-There are 4 papers, all with usable summaries:
+The previous handoff described 4 papers. A read-only check on 2026-08-10 found
+9 distinct physical paper records in the active database, each with 49–60
+existing bilingual deep-read pairs. Treat 9 as the current observed baseline;
+do not delete or consolidate records to force the old count. The source database
+was opened with SQLite `mode=ro&immutable=1` only. Its schema remained at
+`user_version = 0`, with no `read_state` or `deleted_at` columns, after the
+compatibility check.
 
-1. `FireRedASR: Open-Source Industrial-Grade`
-2. `A Two-Stage Hierarchical Deep Filtering Framework for Real-Time Speech Enhancement`
-3. `F5-TTS: A Fairytaler that Fakes Fluent`
-4. `Contextual Biasing for LLM-Based ASR with Hotword Retrieval and Reinforcement Learning`
-
-Current facets:
-
-```text
-summary: ready 4, error 0, pending 0
-rating: 0 stars 4, 1/2/3 stars 0
-```
-
-Custom tags exist but are not assigned to any paper:
-
-```text
-ASR: 0 papers
-hotword: 0 papers
-speechLLM: 0 papers
-WKS: 0 papers
-```
-
-The zero counts are real data, not a counting error. Zero-count tags are disabled in the filter sidebar until a paper is assigned through paper editing or batch tagging.
+An exact schema-only clone, containing no settings, credentials, paper rows, or
+PDF content, migrated successfully to schema version 2 and added analysis jobs,
+analysis runs, page chunks, read state, and recycle-bin fields. Automated tests
+must continue to use temporary data directories.
 
 ## 6. Implemented Features
 
@@ -164,7 +152,7 @@ The zero counts are real data, not a counting error. Zero-count tags are disable
 - Local SQLite persistence across restarts.
 - Duplicate consolidation by normalized PDF paper title.
 - A newer successful duplicate replaces older failed/poorer records while preserving the union of tags and the highest rating.
-- Duplicate PDF files and extracted assets are removed from disk.
+- Duplicate records are moved to the recoverable recycle bin; their PDFs and extracted assets are retained.
 
 ### Detailed bilingual summary
 
@@ -179,6 +167,26 @@ The zero counts are real data, not a counting error. Zero-count tags are disable
 - Existing summaries are preserved if a regeneration request fails.
 - Latest typography fix: decimal/scientific/numeric values such as `0.91`, `5e-5`, and `1.2M` inherit the exact body font size, weight, and line height instead of being rendered as bold keywords.
 
+### Layered analysis and versioned jobs
+
+- Existing 40–55 pair bilingual summaries remain the independent deep-read source in `papers.summary_pairs`.
+- Quick read is stored separately and covers the headline, motivation, method, findings, contributions, limitations, and reading guide with PDF page evidence.
+- Figure analysis uses existing PyMuPDF page assets and explains what to inspect, what the page supports, and why it matters.
+- Figure analysis is safely text-grounded when the configured model has no image capability; it never claims pixel inspection.
+- Analysis input hashes include paper content and, for figures, actual image-file content hashes rather than only file paths.
+- `analysis_jobs` persists queued/running/succeeded/failed states, attempts, errors, provider/model, tokens, duration, input hash, and prompt version.
+- `analysis_runs` preserves successful and failed historical versions; a new quick read never overwrites the deep read.
+- Running jobs are recovered after service restart and failed jobs remain retryable up to the stored limit.
+
+### Retrieval and cited questions
+
+- Page text is split into stable chunks with paper ID, page, section hint, ordinal, and content hash.
+- SQLite FTS5 is used when available, with a local `LIKE` fallback for constrained environments.
+- Questions support current-paper and whole-library scope.
+- Model answers are limited to retrieved context and must return at least one valid retrieved source ID.
+- Invalid or invented source IDs are discarded; no OpenAI-compatible configuration returns an explicit unavailable state.
+- Source entries include paper title, page, excerpt, and content hash; the frontend jumps to the cited PDF page.
+
 ### PDF reader and notes
 
 - Local PDF page renderer instead of an embedded browser PDF plugin.
@@ -186,7 +194,8 @@ The zero counts are real data, not a counting error. Zero-count tags are disable
 - Text selection and double-click word translation.
 - Persistent PDF highlights with four colors.
 - Optional annotation notes.
-- Three reader panels can be independently collapsed.
+- The deep-read reader panels can be independently collapsed.
+- The reader has compact Quick read / Bilingual deep read / Ask paper / Notes modes.
 
 ### Vocabulary
 
@@ -207,10 +216,10 @@ The zero counts are real data, not a counting error. Zero-count tags are disable
 - Active nonzero tags can be clicked again to clear; `All papers` also clears the tag filter.
 - Zero-count tags display `0 papers` and cannot open an empty result accidentally.
 - Multi-select and select all current results.
-- Batch generate/regenerate summaries sequentially; a single failure does not stop the queue and failed items remain selected.
+- Batch quick-read analysis is submitted to the persistent backend queue in one request rather than browser-side serial state.
 - Batch add/remove tags.
 - Batch set 0-3 star rating.
-- Batch delete papers, PDFs, extracted assets, and annotations.
+- Batch delete moves papers to the recoverable recycle bin without removing PDFs, assets, summaries, vocabulary links, or annotations.
 - Batch export Markdown summaries or JSON metadata.
 
 ### Native Windows desktop
@@ -232,7 +241,12 @@ backend/app.py
   summary execution, settings, translation, annotations, and static serving.
 
 backend/database.py
-  SQLite schema/migrations and all paper/tag/vocabulary/annotation/settings queries.
+  SQLite schema/migrations and all paper/tag/vocabulary/annotation/settings,
+  analysis job/run, chunk-index, and recycle-bin queries.
+
+backend/analysis.py
+  Quick-read, figure-analysis, stable text-chunking, input hashing, and
+  retrieval-constrained cited-question logic.
 
 backend/llm.py
   Detailed summary prompt, OpenAI-compatible request, provider controls,
@@ -261,6 +275,10 @@ frontend/styles.css
 tests/test_api.py
   API lifecycle, upload/dedup, facets, batch actions, annotations,
   translation, vocabulary, range requests, settings, and cleanup.
+
+tests/test_analysis.py
+  Legacy-schema migration, restart recovery, chunk retrieval, analysis
+  versions, citation filtering, unavailable QA state, and recycle restore.
 
 tests/test_llm.py
   Summary parsing, glossary/IPA behavior, DeepSeek provider controls,
@@ -294,6 +312,18 @@ DELETE /api/papers/{id}
 POST   /api/papers/{id}/generate-summary
 POST   /api/papers/batch
 
+GET    /api/papers/{id}/analyses
+POST   /api/papers/{id}/analyses/quick-read
+POST   /api/papers/{id}/analyses/figure-analysis
+GET    /api/analysis-jobs
+GET    /api/analysis-jobs/{id}
+POST   /api/analysis-jobs/batch
+POST   /api/analysis-jobs/{id}/retry
+GET    /api/search/chunks
+POST   /api/qa
+GET    /api/trash
+POST   /api/trash/{id}/restore
+
 GET    /api/papers/{id}/file
 GET    /api/papers/{id}/assets/{filename}
 GET    /api/papers/{id}/pages/{page}.png
@@ -319,7 +349,7 @@ GET    /api/settings
 PUT    /api/settings
 ```
 
-`POST /api/papers/batch` accepts at most 500 unique paper IDs and supports `add_tags`, `remove_tags`, `set_rating`, and `delete`. Batch summary generation is intentionally scheduled client-side, one paper at a time, so progress and per-paper failures remain visible.
+`POST /api/papers/batch` accepts at most 500 unique paper IDs and supports `add_tags`, `remove_tags`, `set_rating`, and recoverable `delete`. `POST /api/analysis-jobs/batch` accepts the selected paper IDs and creates persistent quick-read or figure-analysis jobs.
 
 ## 9. Verification
 
@@ -333,12 +363,12 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-24 tests passed
+29 tests passed
 JavaScript syntax check passed
 Windows PyInstaller `onedir` build passed
-Packaged EXE health check returned version 1.9.1
-Packaged EXE started without `--data-dir` and loaded all 4 papers through the local desktop config
-Desktop browser interaction and 1024x700 screenshot QA passed
+Packaged EXE health check returned version 2.0.0 using a temporary data directory
+Desktop and 390px-wide browser interaction and screenshot QA passed against temporary data
+Quick-read jobs, figure jobs, historical versions, evidence-page jumps, unavailable QA state, and notes were exercised
 No browser console warnings or errors in the final check
 ```
 
@@ -361,11 +391,11 @@ The API tests use a temporary data directory and do not alter the real library.
 These are not regressions, but they are the most useful next development areas:
 
 1. Add a signed Windows installer, code signing, and an update delivery strategy around the verified portable desktop bundle.
-2. Move long-running LLM summaries into a persistent backend job queue so work survives a browser refresh or desktop-client restart.
-3. Optimize large libraries: the list API currently includes complete summary pairs, which will become unnecessarily heavy with hundreds of papers. Add lightweight list projections and pagination/virtualization.
-4. Add automated frontend interaction tests for tag toggle, select-all, batch dialogs, sentence linkage, and numeric typography.
-5. Add explicit backup/restore UI for the entire `data` directory.
-6. Add optional automatic tag suggestions, but do not silently assign user tags without confirmation.
+2. Move detailed bilingual deep-read generation into the persistent job/run model while preserving the current `summary_pairs` compatibility contract.
+3. Optimize large libraries: add lightweight list projections and pagination/virtualization instead of returning complete summary pairs.
+4. Add automated frontend interaction coverage for the four reader modes and source-page navigation.
+5. Add explicit backup/restore and recycle-bin management UI for the entire `data` directory.
+6. Add optional local OCR for scanned PDFs before indexing; never synthesize evidence for pages without extractable text.
 
 ## 12. Prompt for the Next Conversation
 
@@ -375,5 +405,5 @@ Use this as the first message in the next development conversation:
 请先完整阅读：
 C:\Users\skywu\Documents\Codex\PaperVault\HANDOFF.md
 
-继续开发 PaperVault 1.9.1。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出 API Key。沿用现有 `/api/*`、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
+继续开发 PaperVault 2.0.0。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出或复制 API Key。真实库最近只读观察为 9 条记录，不要按旧交接强制改回 4 条。沿用现有 `/api/*`、持久化分析任务、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
 ```

@@ -35,6 +35,17 @@ def extract_pdf(path: Path) -> dict[str, Any]:
     }
 
 
+def extract_page_texts(path: Path) -> list[dict[str, Any]]:
+    reader = PdfReader(str(path))
+    pages: list[dict[str, Any]] = []
+    for page_number, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        text = SPACE_RE.sub(" ", text)
+        text = BLANK_RE.sub("\n\n", text).strip()
+        pages.append({"page": page_number, "text": text})
+    return pages
+
+
 def infer_title(text: str, filename: str) -> str:
     candidates = [line.strip() for line in text[:5000].splitlines() if line.strip()]
     for line in candidates[:12]:

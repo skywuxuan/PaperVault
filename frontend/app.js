@@ -16,6 +16,14 @@ const state = {
   selectedPaperIds: new Set(),
   batchRunning: false,
   currentPaper: null,
+  readerMode: "quick",
+  analysisRuns: [],
+  analysisJobs: [],
+  analysisSelections: { quick_read: null, figure_analysis: null },
+  analysisPollTimer: null,
+  qaResult: null,
+  qaError: "",
+  qaBusy: false,
   activePair: null,
   pairClickTimer: null,
   vocabulary: [],
@@ -140,6 +148,23 @@ function paperSnippet(paper) {
   return preferred?.zh || pairs[0].en || "";
 }
 
+function latestPaperJob(paper) {
+  const jobs = Object.values(paper.analysis_jobs || {});
+  return jobs.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)))[0] || null;
+}
+
+function jobStatusLabel(job) {
+  if (!job) return "";
+  const type = job.job_type === "figure_analysis" ? "图表" : "速读";
+  const status = {
+    queued: "排队中",
+    running: "分析中",
+    succeeded: "已完成",
+    failed: "失败",
+  }[job.status] || job.status;
+  return `${type} · ${status}`;
+}
+
 function tagChip(tag) {
   const chip = make("span", "tag-chip", tag.name);
   chip.style.setProperty("--chip-color", tag.color);
@@ -171,6 +196,7 @@ async function loadSettings() {
   const data = await api("/api/settings");
   state.settings = data.settings;
   updateProviderHint();
+  renderQaPanel();
 }
 
 async function loadVocabulary() {
@@ -203,7 +229,7 @@ function renderLibrary() {
 
   for (const paper of state.papers) {
     const selected = state.selectedPaperIds.has(paper.id);
-    const row = make("article", `paper-row ${selected ? "selected" : ""}`.trim());
+    const row = make("article", `paper-row ${selected ? "selected" : ""} ${paper.read_state === "unread" ? "unread" : ""}`.trim());
     row.tabIndex = 0;
     row.setAttribute("role", "button");
     row.setAttribute("aria-label", `打开 ${paper.title}`);
@@ -229,7 +255,15 @@ function renderLibrary() {
 
     const content = make("div", "paper-main");
     const titleLine = make("div", "paper-title-line");
-    titleLine.append(make("span", "paper-type-mark", "PDF"), make("h2", "paper-title", paper.title));
+    const readButton = make("button", `read-state-button ${paper.read_state === "read" ? "read" : ""}`, paper.read_state === "read" ? "●" : "○");
+    readButton.type = "button";
+    readButton.title = paper.read_state === "read" ? "标记为未读" : "标记为已读";
+    readButton.setAttribute("aria-label", readButton.title);
+    readButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setPaperReadState(paper.id, paper.read_state === "read" ? "unread" : "read").catch(handleError);
+    });
+    titleLine.append(make("span", "paper-type-mark", "PDF"), make("h2", "paper-title", paper.title), readButton);
     content.append(titleLine);
     const authorLine = [paper.authors, paper.publication_year].filter(Boolean).join(" · ") || paper.original_filename;
     content.append(make("p", "paper-authors", authorLine));
@@ -246,6 +280,8 @@ function renderLibrary() {
     facts.append(pages, make("span", "", formatBytes(paper.file_size)), created);
     const summaryState = make("span", `summary-state ${paper.summary_status || "pending"}`, statusLabels[paper.summary_status] || "待生成");
     facts.append(summaryState);
+    const latestJob = latestPaperJob(paper);
+    if (latestJob) facts.append(make("span", `analysis-state ${latestJob.status}`, jobStatusLabel(latestJob)));
     row.append(checkboxLabel, content, facts, make("span", "row-arrow", "→"));
     list.append(row);
   }
@@ -269,6 +305,19 @@ function renderLibrary() {
     $("#emptyText").textContent = filtering ? "调整关键词或标签筛选后再试。" : "上传第一篇 PDF，建立你的本地研究资料库。";
     $("#emptyUploadButton").hidden = filtering;
   }
+}
+
+async function setPaperReadState(paperId, readState, render = true) {
+  const result = await api(`/api/papers/${paperId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ read_state: readState }),
+  });
+  const index = state.papers.findIndex((paper) => paper.id === paperId);
+  if (index >= 0) state.papers[index] = result.paper;
+  if (state.currentPaper?.id === paperId) state.currentPaper.read_state = readState;
+  if (render) renderLibrary();
+  return result.paper;
 }
 
 function renderLibraryFacets() {
@@ -404,47 +453,34 @@ async function runBatchMutation(action, payload, successMessage) {
   }
 }
 
-async function generateSelectedSummaries() {
+async function queueSelectedQuickReads() {
   const papers = selectedPapers();
   if (!papers.length || state.batchRunning) return;
-  if (state.settings.provider !== "openai_compatible") {
-    showSettingsDialog();
-    toast("批量生成摘要需要先配置模型", "error");
-    return;
-  }
-  const readyCount = papers.filter((paper) => ["ready", "draft", "edited"].includes(paper.summary_status)).length;
-  const detail = readyCount
-    ? `将为 ${papers.length} 篇论文生成摘要，其中 ${readyCount} 篇会覆盖现有摘要。`
-    : `将按顺序为 ${papers.length} 篇论文生成详细双语摘要。`;
-  const accepted = await confirmAction("批量生成摘要", `${detail} 单篇失败不会中断后续任务。`);
+  const accepted = await confirmAction(
+    "批量速读分析",
+    `将为所选 ${papers.length} 篇论文创建后台任务；关闭页面或重启服务后任务记录仍会保留。`,
+  );
   if (!accepted) return;
-
   state.batchRunning = true;
   updateBatchToolbar();
   closeBatchMenus();
-  const failures = [];
-  let completed = 0;
-  for (const paper of papers) {
-    setBatchProgress("正在生成摘要", completed, papers.length, `${completed + 1} / ${papers.length} · ${paper.title}`);
-    try {
-      await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
-    } catch (error) {
-      failures.push({ id: paper.id, title: paper.title, message: error.message });
-    }
-    completed += 1;
-    $("#batchProgressBar").value = completed;
-  }
-  await loadLibrary().catch(handleError);
-  state.selectedPaperIds = new Set(failures.map((item) => item.id));
-  state.batchRunning = false;
-  renderLibrary();
-  const succeeded = papers.length - failures.length;
-  if (failures.length) {
-    finishBatchProgress("批量摘要已结束", `${succeeded} 篇成功，${failures.length} 篇失败`);
-    toast(`${succeeded} 篇摘要已完成，${failures.length} 篇失败并已保留选中`, "error");
-  } else {
-    finishBatchProgress("批量摘要已完成", `${succeeded} 篇论文全部生成成功`);
-    toast(`已完成 ${succeeded} 篇论文的双语摘要`);
+  setBatchProgress("正在创建速读任务", 0, papers.length, `${papers.length} 篇论文`);
+  try {
+    const result = await api("/api/analysis-jobs/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paper_ids: papers.map((paper) => paper.id), job_type: "quick_read" }),
+    });
+    clearPaperSelection(false);
+    await loadLibrary();
+    finishBatchProgress("速读任务已提交", `后台任务 ${result.queued_count} 项`);
+    toast(`已提交 ${result.queued_count} 项速读任务`);
+  } catch (error) {
+    $("#batchProgress").hidden = true;
+    handleError(error);
+  } finally {
+    state.batchRunning = false;
+    updateBatchToolbar();
   }
 }
 
@@ -483,10 +519,10 @@ async function deleteSelectedPapers() {
   if (!count) return;
   const accepted = await confirmAction(
     "批量删除论文",
-    `将永久删除所选 ${count} 篇论文、PDF 文件、摘要、图表和批注。此操作无法撤销。`,
+    `所选 ${count} 篇论文将移入回收站，PDF、摘要、图表和批注会原样保留。`,
   );
   if (!accepted) return;
-  await runBatchMutation("delete", {}, `已删除 {count} 篇论文`);
+  await runBatchMutation("delete", {}, `已将 {count} 篇论文移入回收站`);
 }
 
 function exportSelectedPapers(format) {
@@ -828,9 +864,12 @@ function navigateToPaper(paperId) {
 
 async function handleRoute() {
   closeWordPopover();
+  stopAnalysisPolling();
   const match = location.hash.match(/^#paper\/([0-9a-f-]+)$/);
   if (!match) {
     state.currentPaper = null;
+    state.analysisRuns = [];
+    state.analysisJobs = [];
     $("#libraryView").hidden = false;
     $("#readerView").hidden = true;
     clearPdfPreview();
@@ -839,10 +878,20 @@ async function handleRoute() {
   try {
     const data = await api(`/api/papers/${match[1]}`);
     state.currentPaper = data.paper;
+    state.analysisRuns = [];
+    state.analysisJobs = [];
+    state.analysisSelections = { quick_read: null, figure_analysis: null };
+    state.qaResult = null;
+    state.qaError = "";
     renderReader();
     $("#libraryView").hidden = true;
     $("#readerView").hidden = false;
     window.scrollTo(0, 0);
+    loadPaperAnalyses().catch(handleError);
+    if (data.paper.read_state !== "read") {
+      state.currentPaper.read_state = "read";
+      setPaperReadState(data.paper.id, "read", false).catch(handleError);
+    }
   } catch (error) {
     toast(error.message, "error");
     location.hash = "";
@@ -970,6 +1019,7 @@ async function loadPdfAnnotations(paperId) {
   if (state.currentPaper?.id !== paperId) return;
   state.pdfAnnotations = data.annotations || [];
   updateAnnotationCount();
+  renderNotesPanel();
   $$(".pdf-text-layer", $("#pdfViewer")).forEach((layer) => {
     const page = Number(layer.closest(".pdf-page")?.dataset.page);
     if (page) applyPdfAnnotations(page, layer);
@@ -1135,6 +1185,7 @@ async function createPdfAnnotation(openEditor = false) {
   const layer = $(`.pdf-page[data-page="${selection.page}"] .pdf-text-layer`, $("#pdfViewer"));
   if (layer) applyPdfAnnotations(selection.page, layer);
   updateAnnotationCount();
+  renderNotesPanel();
   closePdfSelectionToolbar(true);
   toast("高亮已保存");
   if (openEditor) showAnnotationPopover(result.annotation, anchor);
@@ -1192,6 +1243,7 @@ async function saveAnnotation() {
   if (index >= 0) state.pdfAnnotations[index] = result.annotation;
   const layer = $(`.pdf-page[data-page="${result.annotation.page}"] .pdf-text-layer`, $("#pdfViewer"));
   if (layer) applyPdfAnnotations(Number(result.annotation.page), layer);
+  renderNotesPanel();
   closeAnnotationPopover();
   toast("批注已保存");
 }
@@ -1207,6 +1259,7 @@ async function deleteAnnotation() {
     if (layer) applyPdfAnnotations(Number(annotation.page), layer);
   }
   updateAnnotationCount();
+  renderNotesPanel();
   closeAnnotationPopover();
   toast("高亮已删除");
 }
@@ -1302,6 +1355,10 @@ function renderReader() {
   termLabel.textContent = "句对联动";
   termLabel.parentElement.title = "单击任一侧句子可同步显示对应句";
   renderSummaries(paper.summary_pairs || [], paper.summary_error, paper.visual_assets || [], paper.id);
+  renderAnalysisPanels();
+  renderQaPanel();
+  renderNotesPanel();
+  setReaderMode(state.readerMode);
 }
 
 function renderReaderIdentity(paper) {
@@ -1313,6 +1370,319 @@ function renderReaderIdentity(paper) {
   paper.tags.forEach((tag) => meta.append(tagChip(tag)));
   meta.append(ratingControl(paper, "reader-rating"));
   $("#pdfMeta").textContent = `${paper.page_count || "-"} 页 · ${formatBytes(paper.file_size)}`;
+}
+
+function setReaderMode(mode) {
+  if (!["quick", "deep", "ask", "notes"].includes(mode)) return;
+  state.readerMode = mode;
+  $$('[data-reader-mode]').forEach((button) => {
+    const active = button.dataset.readerMode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  const deep = mode === "deep";
+  $("#englishPanel").hidden = !deep;
+  $("#chinesePanel").hidden = !deep;
+  $$('[data-analysis-panel]').forEach((panel) => {
+    panel.hidden = panel.dataset.analysisPanel !== mode;
+  });
+  $("#regenerateButton").hidden = !deep;
+  updatePanelLayout();
+  if (mode === "quick") renderAnalysisPanels();
+  if (mode === "ask") renderQaPanel();
+  if (mode === "notes") renderNotesPanel();
+}
+
+function focusReaderModePanel(mode) {
+  if (window.innerWidth > 760) return;
+  const target = mode === "deep"
+    ? $("#englishPanel")
+    : $(`[data-analysis-panel="${mode}"]`);
+  const grid = $("#readerGrid");
+  if (!target || !grid) return;
+  grid.scrollTo({ left: target.offsetLeft, behavior: "smooth" });
+}
+
+function stopAnalysisPolling() {
+  if (state.analysisPollTimer) window.clearTimeout(state.analysisPollTimer);
+  state.analysisPollTimer = null;
+}
+
+function latestAnalysisJob(type) {
+  return state.analysisJobs.find((job) => job.job_type === type) || null;
+}
+
+function selectedAnalysisRun(type) {
+  const successful = state.analysisRuns.filter((run) => run.analysis_type === type && run.status === "succeeded");
+  const selectedId = state.analysisSelections[type];
+  return successful.find((run) => run.id === selectedId) || successful[0] || null;
+}
+
+async function loadPaperAnalyses() {
+  const paperId = state.currentPaper?.id;
+  if (!paperId) return;
+  const hadActive = state.analysisJobs.some((job) => ["queued", "running"].includes(job.status));
+  const data = await api(`/api/papers/${paperId}/analyses`);
+  if (state.currentPaper?.id !== paperId) return;
+  state.analysisRuns = data.runs || [];
+  state.analysisJobs = data.jobs || [];
+  renderAnalysisPanels();
+  const active = state.analysisJobs.filter((job) => ["queued", "running"].includes(job.status));
+  const latestJobs = [latestAnalysisJob("quick_read"), latestAnalysisJob("figure_analysis")].filter(Boolean);
+  const failed = latestJobs.filter((job) => job.status === "failed");
+  const summary = $("#readerTaskSummary");
+  if (active.length) summary.textContent = `${active.length} 项分析任务进行中`;
+  else if (failed.length) summary.textContent = `${failed.length} 项任务失败，可重试`;
+  else if (state.analysisRuns.length) summary.textContent = `${state.analysisRuns.filter((run) => run.status === "succeeded").length} 个分析版本`;
+  else summary.textContent = "分析任务就绪";
+  stopAnalysisPolling();
+  if (active.length) {
+    state.analysisPollTimer = window.setTimeout(() => loadPaperAnalyses().catch(handleError), 700);
+  } else if (hadActive) {
+    loadLibrary().catch(handleError);
+  }
+}
+
+function renderAnalysisPanels() {
+  if (!$("#quickPanel")) return;
+  renderAnalysisVersionSelect("quick_read", $("#quickRunSelect"));
+  renderAnalysisVersionSelect("figure_analysis", $("#figureRunSelect"));
+  renderAnalysisJob("quick_read", $("#quickJobStatus"), $("#quickReadButton"));
+  renderAnalysisJob("figure_analysis", $("#figureJobStatus"), $("#figureAnalysisButton"));
+  renderQuickReadContent(selectedAnalysisRun("quick_read"));
+  renderFigureAnalysisContent(selectedAnalysisRun("figure_analysis"));
+  const active = state.analysisJobs.some((job) => ["queued", "running"].includes(job.status));
+  const failed = [latestAnalysisJob("quick_read"), latestAnalysisJob("figure_analysis")]
+    .filter(Boolean)
+    .some((job) => job.status === "failed");
+  const status = $("#quickPanelStatus");
+  status.className = `status-pill ${failed ? "error" : active ? "draft" : ""}`;
+  status.textContent = active ? "任务进行中" : failed ? "有任务失败" : state.analysisRuns.length ? "已有版本" : "尚未分析";
+}
+
+function renderAnalysisVersionSelect(type, select) {
+  const runs = state.analysisRuns.filter((run) => run.analysis_type === type && run.status === "succeeded");
+  const selected = selectedAnalysisRun(type);
+  select.replaceChildren();
+  runs.forEach((run, index) => {
+    const option = document.createElement("option");
+    option.value = run.id;
+    option.textContent = `${index === 0 ? "最新" : `历史 ${index}`} · ${formatDate(run.created_at)} · ${run.provider === "local" ? "本地" : run.model || "模型"}`;
+    select.append(option);
+  });
+  select.hidden = runs.length < 2;
+  if (selected) select.value = selected.id;
+}
+
+function renderAnalysisJob(type, container, actionButton) {
+  const job = latestAnalysisJob(type);
+  container.replaceChildren();
+  const active = job && ["queued", "running"].includes(job.status);
+  actionButton.disabled = Boolean(active);
+  actionButton.lastChild.textContent = type === "quick_read"
+    ? (selectedAnalysisRun(type) ? " 重新生成" : " 生成速读")
+    : (selectedAnalysisRun(type) ? " 重新分析" : " 分析图表");
+  if (!job) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  container.className = `analysis-job-status ${job.status}`;
+  if (active) {
+    const progress = document.createElement("progress");
+    container.append(progress, make("span", "", job.status === "queued" ? "任务已入队，等待后台处理" : `正在分析 · 第 ${job.attempts} 次尝试`));
+  } else if (job.status === "failed") {
+    const message = make("span", "", job.error || "分析失败");
+    container.append(message);
+    if (Number(job.attempts) < Number(job.max_attempts)) {
+      const retry = make("button", "text-button", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => retryAnalysisJob(job.id));
+      container.append(retry);
+    } else {
+      container.append(make("span", "", "已达重试上限"));
+    }
+  } else {
+    container.append(make("span", "", `已完成 · ${job.duration_ms || 0} ms · 输入 ${String(job.input_hash || "").slice(0, 8)}`));
+  }
+}
+
+async function queueAnalysis(type) {
+  const paper = state.currentPaper;
+  if (!paper) return;
+  await api(`/api/papers/${paper.id}/analyses/${type === "quick_read" ? "quick-read" : "figure-analysis"}`, { method: "POST" });
+  state.analysisSelections[type] = null;
+  state.readerMode = "quick";
+  await loadPaperAnalyses();
+}
+
+async function retryAnalysisJob(jobId) {
+  try {
+    await api(`/api/analysis-jobs/${jobId}/retry`, { method: "POST" });
+    await loadPaperAnalyses();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function pageJumpButton(page, label = `第 ${page} 页`) {
+  const button = make("button", "page-jump-button", label);
+  button.type = "button";
+  button.title = `跳到 PDF 第 ${page} 页`;
+  button.addEventListener("click", () => goToPdfPage(page));
+  return button;
+}
+
+function renderQuickReadContent(run) {
+  const container = $("#quickReadContent");
+  container.replaceChildren();
+  const content = run?.content;
+  if (!content?.headline) {
+    container.append(make("p", "analysis-empty", "尚未生成速读分析。"));
+    return;
+  }
+  const headline = make("div", "quick-headline");
+  headline.append(make("span", "analysis-kicker", "一句话结论"), make("p", "", content.headline.text), pageJumpButton(content.headline.page));
+  container.append(headline);
+  for (const section of content.sections || []) {
+    const block = make("section", "quick-section");
+    block.append(make("h4", "", section.title));
+    const list = make("ul", "quick-fact-list");
+    for (const item of section.items || []) {
+      const row = make("li");
+      row.append(make("span", "", item.text), pageJumpButton(item.page, `p. ${item.page}`));
+      list.append(row);
+    }
+    block.append(list);
+    container.append(block);
+  }
+}
+
+function renderFigureAnalysisContent(run) {
+  const container = $("#figureAnalysisContent");
+  container.replaceChildren();
+  const figures = run?.content?.figures || [];
+  if (!figures.length) {
+    container.append(make("p", "analysis-empty", "尚未生成关键图表分析。"));
+    return;
+  }
+  for (const figure of figures) {
+    const item = make("article", "figure-analysis-item");
+    const filename = String(figure.asset_path || "").split("/").at(-1);
+    if (filename) {
+      const image = document.createElement("img");
+      image.src = `/api/papers/${state.currentPaper.id}/assets/${filename}`;
+      image.alt = figure.title || `第 ${figure.page} 页图表`;
+      image.loading = "lazy";
+      image.addEventListener("error", () => image.remove(), { once: true });
+      item.append(image);
+    }
+    const body = make("div", "figure-analysis-body");
+    const heading = make("div", "figure-analysis-heading");
+    heading.append(make("h4", "", figure.title || `第 ${figure.page} 页`), pageJumpButton(figure.page));
+    body.append(heading);
+    for (const [label, value] of [["看哪里", figure.look_for], ["证明什么", figure.evidence], ["为什么重要", figure.importance]]) {
+      const line = make("p");
+      line.append(make("strong", "", label), document.createTextNode(value || "—"));
+      body.append(line);
+    }
+    item.append(body);
+    container.append(item);
+  }
+}
+
+function renderQaPanel() {
+  if (!$("#qaAvailability")) return;
+  const available = state.settings.provider === "openai_compatible" && state.settings.base_url && state.settings.model;
+  const availability = $("#qaAvailability");
+  availability.className = `status-pill ${available ? "" : "error"}`;
+  availability.textContent = available ? `模型 · ${state.settings.model}` : "需要模型配置";
+  $("#qaSubmitButton").disabled = state.qaBusy;
+  const answer = $("#qaAnswer");
+  const sources = $("#qaSourceList");
+  answer.replaceChildren();
+  sources.replaceChildren();
+  if (state.qaBusy) {
+    answer.append(make("p", "analysis-empty", "正在检索论文原文并生成带引用回答..."));
+  } else if (state.qaError) {
+    answer.append(make("p", "qa-error", state.qaError));
+  } else if (state.qaResult) {
+    answer.append(make("p", "qa-answer-text", state.qaResult.answer));
+  } else {
+    answer.append(make("p", "analysis-empty", available ? "回答只会使用本地检索到的论文原文。" : "请先在模型设置中配置 OpenAI-compatible 服务。"));
+  }
+  const resultSources = state.qaResult?.sources || [];
+  $("#qaSourceCount").textContent = String(resultSources.length);
+  if (!resultSources.length) {
+    sources.append(make("p", "analysis-empty", "提交问题后显示引用页。"));
+    return;
+  }
+  for (const source of resultSources) {
+    const button = make("button", "qa-source-item");
+    button.type = "button";
+    button.append(
+      make("span", "qa-source-id", `${source.id} · p. ${source.page}`),
+      make("strong", "", source.paper_title),
+      make("span", "qa-source-excerpt", source.excerpt),
+    );
+    button.addEventListener("click", () => openQaSource(source));
+    sources.append(button);
+  }
+}
+
+async function handleQaSubmit(event) {
+  event.preventDefault();
+  const question = $("#qaQuestion").value.trim();
+  if (!question || !state.currentPaper || state.qaBusy) return;
+  state.qaBusy = true;
+  state.qaError = "";
+  state.qaResult = null;
+  renderQaPanel();
+  try {
+    state.qaResult = await api("/api/qa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, scope: $("#qaScope").value, paper_id: state.currentPaper.id }),
+    });
+  } catch (error) {
+    state.qaError = error.message;
+  } finally {
+    state.qaBusy = false;
+    renderQaPanel();
+  }
+}
+
+function openQaSource(source) {
+  if (source.paper_id === state.currentPaper?.id) {
+    goToPdfPage(source.page);
+    return;
+  }
+  state.pendingPdfPage = source.page;
+  navigateToPaper(source.paper_id);
+}
+
+function renderNotesPanel() {
+  if (!$("#notesList")) return;
+  const container = $("#notesList");
+  container.replaceChildren();
+  $("#notesCount").textContent = `${state.pdfAnnotations.length} 条`;
+  if (!state.pdfAnnotations.length) {
+    container.append(make("p", "analysis-empty", "当前论文还没有高亮或笔记。"));
+    return;
+  }
+  const annotations = [...state.pdfAnnotations].sort((left, right) => Number(left.page) - Number(right.page));
+  for (const annotation of annotations) {
+    const button = make("button", "note-list-item");
+    button.type = "button";
+    button.dataset.color = annotation.color || "yellow";
+    button.append(
+      make("span", "note-page", `p. ${annotation.page}`),
+      make("strong", "", annotation.selected_text || "高亮内容"),
+      make("span", "note-text", annotation.note || "仅高亮，尚未添加笔记"),
+    );
+    button.addEventListener("click", () => goToPdfPage(annotation.page));
+    container.append(button);
+  }
 }
 
 function renderSummaries(pairs, error = "", visualAssets = [], paperId = "") {
@@ -1864,7 +2234,7 @@ async function regenerateSummary() {
 async function deleteCurrentPaper() {
   const paper = state.currentPaper;
   if (!paper) return;
-  const accepted = await confirmAction("删除论文", `“${paper.title}”及其本地 PDF 文件将被永久删除。`);
+  const accepted = await confirmAction("移入回收站", `“${paper.title}”将从资料库隐藏，PDF、摘要、图表和批注会原样保留。`);
   if (!accepted) return;
   setBusy(true, "正在删除论文...");
   try {
@@ -1872,7 +2242,7 @@ async function deleteCurrentPaper() {
     state.currentPaper = null;
     location.hash = "";
     await Promise.all([loadLibrary(), loadTags()]);
-    toast("论文已删除");
+    toast("论文已移入回收站");
   } catch (error) {
     handleError(error);
   } finally {
@@ -1946,6 +2316,7 @@ async function saveSettings(event) {
     });
     state.settings = result.settings;
     updateProviderHint();
+    renderQaPanel();
     closeDialog("settingsDialog");
     toast("模型设置已保存");
   } catch (error) {
@@ -2041,6 +2412,14 @@ function togglePanel(panelName) {
 }
 
 function updatePanelLayout() {
+  if (state.readerMode !== "deep") {
+    const compactAnalysis = window.innerWidth <= 760;
+    $("#readerGrid").style.gridTemplateColumns = compactAnalysis
+      ? "100% 100%"
+      : "minmax(360px, .95fr) minmax(440px, 1.35fr)";
+    $("#pdfPanel")?.classList.remove("collapsed");
+    return;
+  }
   const labels = { pdf: "原始论文", english: "英文摘要", chinese: "中文摘要" };
   const compact = window.innerWidth <= 760;
   const medium = window.innerWidth <= 1080;
@@ -2076,6 +2455,23 @@ function bindEvents() {
   $("#backButton").addEventListener("click", () => { location.hash = ""; });
   $("#editPaperButton").addEventListener("click", showEditDialog);
   $("#regenerateButton").addEventListener("click", regenerateSummary);
+  $$('[data-reader-mode]').forEach((button) => {
+    button.addEventListener("click", () => {
+      setReaderMode(button.dataset.readerMode);
+      focusReaderModePanel(button.dataset.readerMode);
+    });
+  });
+  $("#quickReadButton").addEventListener("click", () => queueAnalysis("quick_read").catch(handleError));
+  $("#figureAnalysisButton").addEventListener("click", () => queueAnalysis("figure_analysis").catch(handleError));
+  $("#quickRunSelect").addEventListener("change", (event) => {
+    state.analysisSelections.quick_read = event.target.value;
+    renderAnalysisPanels();
+  });
+  $("#figureRunSelect").addEventListener("change", (event) => {
+    state.analysisSelections.figure_analysis = event.target.value;
+    renderAnalysisPanels();
+  });
+  $("#qaForm").addEventListener("submit", handleQaSubmit);
   $("#downloadMarkdownButton").addEventListener("click", downloadSummaryMarkdown);
   $("#deletePaperButton").addEventListener("click", deleteCurrentPaper);
   $("#pdfPreviousPage").addEventListener("click", () => goToPdfPage(state.pdfCurrentPage - 1));
@@ -2130,7 +2526,7 @@ function bindEvents() {
     renderLibrary();
   });
   $("#clearSelectionButton").addEventListener("click", () => clearPaperSelection());
-  $("#batchSummaryButton").addEventListener("click", () => generateSelectedSummaries().catch(handleError));
+  $("#batchQuickReadButton").addEventListener("click", () => queueSelectedQuickReads().catch(handleError));
   $("#batchTagsButton").addEventListener("click", showBatchTagsDialog);
   $("#batchDeleteButton").addEventListener("click", () => deleteSelectedPapers().catch(handleError));
   $("#batchToolbar").addEventListener("click", (event) => {

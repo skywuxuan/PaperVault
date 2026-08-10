@@ -180,6 +180,44 @@ def translate_english(text: str, context: str, settings: dict[str, str]) -> dict
     return {"translation_zh": translation[:500], "note_zh": note[:1000]}
 
 
+def request_structured_json(
+    system_prompt: str,
+    user_prompt: str,
+    settings: dict[str, str],
+    *,
+    max_tokens: int = 4000,
+    timeout: int = 180,
+) -> tuple[dict[str, Any], int]:
+    if settings.get("provider") != "openai_compatible":
+        raise SummaryError("This analysis requires an OpenAI-compatible model")
+    payload = {
+        "model": settings.get("model", "gpt-4.1-mini"),
+        "temperature": 0.1,
+        "max_tokens": max(500, min(max_tokens, 16000)),
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    _apply_provider_controls(payload, settings)
+    content, usage = _request_chat_completion_result(payload, settings, timeout)
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.I)
+    try:
+        result = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise SummaryError("LLM returned invalid JSON") from exc
+    if not isinstance(result, dict):
+        raise SummaryError("LLM returned a non-object JSON response")
+    try:
+        token_count = int(usage.get("total_tokens", 0))
+    except (TypeError, ValueError):
+        token_count = 0
+    return result, max(0, token_count)
+
+
 def _apply_provider_controls(payload: dict[str, Any], settings: dict[str, str]) -> None:
     base_url = settings.get("base_url", "")
     hostname = (urllib.parse.urlparse(base_url).hostname or "").casefold()
@@ -191,6 +229,13 @@ def _apply_provider_controls(payload: dict[str, Any], settings: dict[str, str]) 
 def _request_chat_completion(
     payload: dict[str, Any], settings: dict[str, str], timeout: int
 ) -> str:
+    content, _ = _request_chat_completion_result(payload, settings, timeout)
+    return content
+
+
+def _request_chat_completion_result(
+    payload: dict[str, Any], settings: dict[str, str], timeout: int
+) -> tuple[str, dict[str, Any]]:
     api_key = os.environ.get("PAPER_VAULT_API_KEY") or settings.get("api_key", "")
     base_url = settings.get("base_url", "https://api.openai.com/v1").rstrip("/")
     endpoint = f"{base_url}/chat/completions"
@@ -221,7 +266,8 @@ def _request_chat_completion(
         )
     if not content:
         raise SummaryError("LLM response contained empty chat completion content")
-    return str(content)
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    return str(content), usage
 
 
 def _parse_pairs(content: str) -> list[dict[str, Any]]:
