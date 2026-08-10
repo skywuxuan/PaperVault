@@ -10,8 +10,7 @@ MODEL_DIRECTORY = (
     Path(__file__).resolve().parent.parent / "data" / "models" / "translate-en_zh-1_9"
 )
 
-_translator = None
-_tokenizer = None
+_model_cache: dict[Path, tuple[object, object]] = {}
 _load_lock = threading.Lock()
 
 
@@ -59,15 +58,19 @@ ACADEMIC_GLOSSARY = {
 }
 
 
-def offline_translation_available() -> bool:
+def offline_translation_available(model_directory: Path | None = None) -> bool:
+    directory = (model_directory or MODEL_DIRECTORY).resolve()
     return (
-        (MODEL_DIRECTORY / "model" / "model.bin").is_file()
-        and (MODEL_DIRECTORY / "sentencepiece.model").is_file()
+        (directory / "model" / "model.bin").is_file()
+        and (directory / "sentencepiece.model").is_file()
     )
 
 
 def translate_english_offline(
-    text: str, context: str = "", known_context_zh: str = ""
+    text: str,
+    context: str = "",
+    known_context_zh: str = "",
+    model_directory: Path | None = None,
 ) -> dict[str, str]:
     source = " ".join(str(text).strip().split())[:240]
     if not source:
@@ -87,7 +90,7 @@ def translate_english_offline(
             "note_zh": "",
         }
 
-    translator, tokenizer = _load_model()
+    translator, tokenizer = _load_model(model_directory)
     try:
         relevant_context = _relevant_context(context, source)
         texts = [source]
@@ -147,16 +150,18 @@ def _clean_context_translation(value: str) -> str:
     return cleaned[:180]
 
 
-def _load_model():
-    global _translator, _tokenizer
-    if _translator is not None and _tokenizer is not None:
-        return _translator, _tokenizer
-    if not offline_translation_available():
+def _load_model(model_directory: Path | None = None):
+    directory = (model_directory or MODEL_DIRECTORY).resolve()
+    cached = _model_cache.get(directory)
+    if cached is not None:
+        return cached
+    if not offline_translation_available(directory):
         raise OfflineTranslationError(
             "离线英译中模型尚未安装，请运行 setup-offline-translation.ps1"
         )
     with _load_lock:
-        if _translator is None or _tokenizer is None:
+        cached = _model_cache.get(directory)
+        if cached is None:
             try:
                 import ctranslate2
                 import sentencepiece
@@ -164,14 +169,16 @@ def _load_model():
                 raise OfflineTranslationError(
                     "离线翻译依赖缺失，请重新运行 start.ps1 安装依赖"
                 ) from exc
-            _translator = ctranslate2.Translator(
-                str(MODEL_DIRECTORY / "model"),
+            translator = ctranslate2.Translator(
+                str(directory / "model"),
                 device="cpu",
                 compute_type="auto",
                 inter_threads=1,
                 intra_threads=0,
             )
-            _tokenizer = sentencepiece.SentencePieceProcessor(
-                model_file=str(MODEL_DIRECTORY / "sentencepiece.model")
+            tokenizer = sentencepiece.SentencePieceProcessor(
+                model_file=str(directory / "sentencepiece.model")
             )
-    return _translator, _tokenizer
+            cached = (translator, tokenizer)
+            _model_cache[directory] = cached
+    return cached

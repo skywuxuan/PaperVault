@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from typing import Mapping
 
 
 APP_NAME = "PaperVault"
+CONFIG_FILENAME = "desktop.json"
 DATA_DIR_ENV = "PAPER_VAULT_DATA_DIR"
 RESOURCE_DIR_ENV = "PAPER_VAULT_RESOURCE_DIR"
 
@@ -27,16 +29,12 @@ def _expanded_path(value: str) -> Path:
     return Path(os.path.expandvars(value)).expanduser().resolve()
 
 
-def default_data_dir(
+def platform_data_dir(
     platform_name: str | None = None,
     environ: Mapping[str, str] | None = None,
     home_dir: Path | None = None,
 ) -> Path:
     environment = os.environ if environ is None else environ
-    override = environment.get(DATA_DIR_ENV, "").strip()
-    if override:
-        return _expanded_path(override)
-
     platform_key = platform_name or sys.platform
     home = (home_dir or Path.home()).resolve()
     if platform_key == "win32":
@@ -49,6 +47,49 @@ def default_data_dir(
     xdg_data_home = environment.get("XDG_DATA_HOME", "").strip()
     base = _expanded_path(xdg_data_home) if xdg_data_home else home / ".local" / "share"
     return (base / APP_NAME.lower()).resolve()
+
+
+def desktop_config_path(
+    platform_name: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home_dir: Path | None = None,
+) -> Path:
+    return platform_data_dir(platform_name, environ, home_dir) / CONFIG_FILENAME
+
+
+def default_data_dir(
+    platform_name: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home_dir: Path | None = None,
+) -> Path:
+    environment = os.environ if environ is None else environ
+    override = environment.get(DATA_DIR_ENV, "").strip()
+    if override:
+        return _expanded_path(override)
+    return platform_data_dir(platform_name, environment, home_dir)
+
+
+def configured_data_dir(
+    platform_name: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home_dir: Path | None = None,
+    config_file: Path | None = None,
+) -> Path:
+    environment = os.environ if environ is None else environ
+    override = environment.get(DATA_DIR_ENV, "").strip()
+    if override:
+        return _expanded_path(override)
+
+    path = config_file or desktop_config_path(platform_name, environment, home_dir)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        configured = str(payload.get("data_dir", "")).strip() if isinstance(payload, dict) else ""
+        expanded = Path(os.path.expandvars(configured)).expanduser()
+        if configured and expanded.is_absolute():
+            return expanded.resolve()
+    except (OSError, TypeError, ValueError):
+        pass
+    return platform_data_dir(platform_name, environment, home_dir)
 
 
 def resource_root(
@@ -70,9 +111,12 @@ def get_desktop_platform(
     platform_name: str | None = None,
     environ: Mapping[str, str] | None = None,
     home_dir: Path | None = None,
+    config_file: Path | None = None,
 ) -> DesktopPlatform:
     platform_key = platform_name or sys.platform
-    data_dir = default_data_dir(platform_key, environ, home_dir)
+    data_dir = configured_data_dir(
+        platform_key, environ, home_dir, config_file=config_file
+    )
     if platform_key == "win32":
         name, renderer, icon_name = "windows", "edgechromium", "papervault.ico"
     elif platform_key == "darwin":

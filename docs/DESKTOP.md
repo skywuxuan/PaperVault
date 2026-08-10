@@ -30,6 +30,20 @@ directory for development or migration:
 launches. Back up an existing data directory before opening it with a newer
 application version.
 
+For a persistent selection that also applies when `PaperVault.exe` is opened
+directly, create `%LOCALAPPDATA%\PaperVault\desktop.json`:
+
+```json
+{
+  "data_dir": "D:\\PaperVaultData"
+}
+```
+
+The directory selection order is `--data-dir`, `PAPER_VAULT_DATA_DIR`, the
+local `desktop.json`, then the platform default. The configuration file is
+machine-local and must not be committed. PDF files, SQLite records, extracted
+assets, and offline translation models all use the selected data directory.
+
 ## Windows packaging
 
 Build the recommended one-directory package:

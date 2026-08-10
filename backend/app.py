@@ -58,6 +58,7 @@ class PaperVaultServer(ThreadingHTTPServer):
         self.data_dir = data_dir.resolve()
         self.upload_dir = self.data_dir / "uploads"
         self.asset_dir = self.data_dir / "assets"
+        self.model_directory = self.data_dir / "models" / "translate-en_zh-1_9"
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.asset_dir.mkdir(parents=True, exist_ok=True)
         self.db = Database(self.data_dir / "paper-vault.db")
@@ -804,7 +805,12 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
 
         source = "offline"
         try:
-            translated = translate_english_offline(source_text, context, known_context_zh)
+            translated = translate_english_offline(
+                source_text,
+                context,
+                known_context_zh,
+                model_directory=self.server.model_directory,
+            )
         except OfflineTranslationError as offline_exc:
             try:
                 translated = translate_english(

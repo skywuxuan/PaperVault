@@ -19,7 +19,7 @@ Windows desktop development startup:
 Desktop health response:
 
 ```json
-{"status":"ok","version":"1.9.0"}
+{"status":"ok","version":"1.9.1"}
 ```
 
 The desktop shell chooses an ephemeral localhost port. The legacy browser mode
@@ -90,16 +90,21 @@ replace, or use either real library for automated tests; tests must continue to
 use temporary data directories.
 
 The packaged Windows desktop app still defaults to `%LOCALAPPDATA%\PaperVault`
-and does not discover the project library automatically. During source desktop
-development, use the explicit shared-library path:
+when no override is configured. This workstation has a machine-local
+`%LOCALAPPDATA%\PaperVault\desktop.json` pointing to the active project
+library, so directly opening the packaged executable and source desktop startup
+both use the same four-paper library. The file contains no credentials and is
+not tracked by Git. An explicit source launch remains available:
 
 ```powershell
 .\start-desktop.ps1 --data-dir ".\data"
 ```
 
 `PAPER_VAULT_DATA_DIR` and `--data-dir` remain the cross-platform override
-contract. Do not perform another migration without first stopping PaperVault,
-creating a consistent backup, and validating the destination database.
+contract and take precedence over the local config. The selected data directory
+now also controls offline translation model loading. Do not perform another
+migration without first stopping PaperVault, creating a consistent backup, and
+validating the destination database.
 
 The API key source file exists at:
 
@@ -328,10 +333,11 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-21 tests passed
+24 tests passed
 JavaScript syntax check passed
 Windows PyInstaller `onedir` build passed
-Packaged EXE health check returned version 1.9.0
+Packaged EXE health check returned version 1.9.1
+Packaged EXE started without `--data-dir` and loaded all 4 papers through the local desktop config
 Desktop browser interaction and 1024x700 screenshot QA passed
 No browser console warnings or errors in the final check
 ```
@@ -369,5 +375,5 @@ Use this as the first message in the next development conversation:
 请先完整阅读：
 C:\Users\skywu\Documents\Codex\PaperVault\HANDOFF.md
 
-继续开发 PaperVault 1.9.0。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出 API Key。沿用现有 `/api/*`、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
+继续开发 PaperVault 1.9.1。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出 API Key。沿用现有 `/api/*`、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
 ```

@@ -6,8 +6,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from backend import __version__
 from desktop.app import BackendRuntime, DesktopBridge, build_parser
-from desktop.platforms import default_data_dir, get_desktop_platform, resource_root
+from desktop.platforms import (
+    configured_data_dir,
+    default_data_dir,
+    desktop_config_path,
+    get_desktop_platform,
+    resource_root,
+)
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -43,6 +50,48 @@ class DesktopPlatformTestCase(unittest.TestCase):
         )
         self.assertEqual(actual, override.resolve())
 
+    def test_persisted_desktop_config_selects_data_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "desktop.json"
+            configured = Path(temp_dir) / "library"
+            config_file.write_text(
+                json.dumps({"data_dir": str(configured)}), encoding="utf-8"
+            )
+            platform = get_desktop_platform(
+                "win32",
+                {"LOCALAPPDATA": str(Path(temp_dir) / "app-data")},
+                config_file=config_file,
+            )
+            self.assertEqual(platform.data_dir, configured.resolve())
+
+    def test_environment_override_wins_over_desktop_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "desktop.json"
+            configured = Path(temp_dir) / "configured"
+            override = Path(temp_dir) / "override"
+            config_file.write_text(
+                json.dumps({"data_dir": str(configured)}), encoding="utf-8"
+            )
+            actual = configured_data_dir(
+                "win32",
+                {
+                    "LOCALAPPDATA": str(Path(temp_dir) / "app-data"),
+                    "PAPER_VAULT_DATA_DIR": str(override),
+                },
+                config_file=config_file,
+            )
+            self.assertEqual(actual, override.resolve())
+
+    def test_invalid_desktop_config_falls_back_to_platform_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "desktop.json"
+            config_file.write_text('{"data_dir": "relative-data"}', encoding="utf-8")
+            environment = {"LOCALAPPDATA": str(Path(temp_dir) / "app-data")}
+            actual = configured_data_dir(
+                "win32", environment, config_file=config_file
+            )
+            self.assertEqual(actual, desktop_config_path("win32", environment).parent)
+
     def test_resource_root_defaults_to_project(self) -> None:
         self.assertEqual(resource_root({}), PROJECT_DIR)
 
@@ -73,7 +122,11 @@ class DesktopRuntimeTestCase(unittest.TestCase):
                 connection.close()
                 runtime.stop()
             self.assertEqual(response.status, 200)
-            self.assertEqual(payload, {"status": "ok", "version": "1.9.0"})
+            self.assertEqual(payload, {"status": "ok", "version": __version__})
+            self.assertEqual(
+                runtime.server.model_directory,
+                Path(temp_dir).resolve() / "models" / "translate-en_zh-1_9",
+            )
             self.assertFalse(runtime.thread.is_alive())
 
     def test_desktop_bridge_exposes_platform_without_secrets(self) -> None:
@@ -82,7 +135,7 @@ class DesktopRuntimeTestCase(unittest.TestCase):
         )
         info = DesktopBridge(platform).app_info()
         self.assertEqual(info["platform"], "windows")
-        self.assertEqual(info["version"], "1.9.0")
+        self.assertEqual(info["version"], __version__)
         self.assertNotIn("api_key", info)
 
 
