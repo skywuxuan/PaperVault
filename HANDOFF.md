@@ -71,15 +71,35 @@ data/
   models/              Offline translation models
 ```
 
-The packaged Windows desktop app defaults to `%LOCALAPPDATA%\PaperVault`.
-`PAPER_VAULT_DATA_DIR` and `--data-dir` provide an explicit cross-platform
-override. The original four-paper library remains untouched at:
+The active four-paper development library is now located at:
+
+```text
+C:\Users\skywu\Documents\Codex\PaperVault\data
+```
+
+It was copied byte-for-byte on 2026-08-10 from the previous library at:
 
 ```text
 C:\Users\skywu\Documents\Codex\2026-08-07\f-d-s-f\outputs\paper-vault\data
 ```
 
-Do not silently copy, migrate, reset, or open that real library during tests.
+The previous library was retained unchanged as a rollback copy. Future Codex
+development uses `C:\Users\skywu\Documents\Codex\PaperVault` as the project
+root and its `data` directory as the active development library. Do not reset,
+replace, or use either real library for automated tests; tests must continue to
+use temporary data directories.
+
+The packaged Windows desktop app still defaults to `%LOCALAPPDATA%\PaperVault`
+and does not discover the project library automatically. During source desktop
+development, use the explicit shared-library path:
+
+```powershell
+.\start-desktop.ps1 --data-dir ".\data"
+```
+
+`PAPER_VAULT_DATA_DIR` and `--data-dir` remain the cross-platform override
+contract. Do not perform another migration without first stopping PaperVault,
+creating a consistent backup, and validating the destination database.
 
 The API key source file exists at:
 
