@@ -14,7 +14,7 @@ from PIL import Image
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from backend.app import PaperVaultServer, friendly_model_error
+from backend.app import PaperVaultServer, friendly_model_error, paper_quality_key
 from backend.llm import SummaryError
 
 
@@ -33,6 +33,37 @@ class FriendlyModelErrorTestCase(unittest.TestCase):
         self.assertEqual(structure_code, "translation_structure_error")
         self.assertIn("英文报告已保留", numeric_message)
         self.assertIn("英文报告已保留", structure_message)
+
+    def test_provider_and_evidence_errors_have_specific_codes(self) -> None:
+        self.assertEqual(
+            friendly_model_error("LLM request failed (429): busy")[1],
+            "model_rate_limited",
+        )
+        self.assertEqual(
+            friendly_model_error("LLM request failed (503): unavailable")[1],
+            "model_service_error",
+        )
+        self.assertEqual(
+            friendly_model_error("LLM returned report blocks without valid page references")[1],
+            "summary_evidence_validation_error",
+        )
+
+    def test_complete_translation_outranks_newer_english_only_duplicate(self) -> None:
+        translated = {
+            "summary_blocks": [{"text_en": "Evidence", "text_zh": "证据"}],
+            "summary_translation_status": "ready",
+            "summary_status": "ready",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        english_only = {
+            "summary_blocks": [{"text_en": "Evidence"}],
+            "summary_translation_status": "error",
+            "summary_status": "translation_error",
+            "updated_at": "2026-02-01T00:00:00+00:00",
+            "created_at": "2026-02-01T00:00:00+00:00",
+        }
+        self.assertGreater(paper_quality_key(translated), paper_quality_key(english_only))
 
 
 class ApiTestCase(unittest.TestCase):
@@ -136,28 +167,53 @@ class ApiTestCase(unittest.TestCase):
         duplicate_body, duplicate_content_type = make_multipart(
             duplicate_fields, "paper-copy.pdf", buffer.getvalue()
         )
-        status, duplicate_upload, _ = self.request(
-            "POST",
-            "/api/papers",
-            duplicate_body,
-            {
-                "Content-Type": duplicate_content_type,
-                "Content-Length": str(len(duplicate_body)),
-            },
-        )
-        self.assertEqual(status, 201)
-        self.assertEqual(duplicate_upload["deduplicated_count"], 1)
+        with patch(
+            "backend.app.generate_summary",
+            side_effect=AssertionError("duplicate upload must not regenerate a summary"),
+        ):
+            status, duplicate_upload, _ = self.request(
+                "POST",
+                "/api/papers",
+                duplicate_body,
+                {
+                    "Content-Type": duplicate_content_type,
+                    "Content-Length": str(len(duplicate_body)),
+                },
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(duplicate_upload["duplicate_skipped"])
+        self.assertEqual(duplicate_upload["deduplicated_count"], 0)
         paper = duplicate_upload["paper"]
         paper_id = paper["id"]
-        self.assertNotEqual(paper_id, first_paper_id)
+        self.assertEqual(paper_id, first_paper_id)
         self.assertEqual(paper["tags"][0]["name"], "Vision")
         status, _, _ = self.request("GET", f"/api/papers/{first_paper_id}")
-        self.assertEqual(status, 404)
+        self.assertEqual(status, 200)
         self.assertTrue((self.server.upload_dir / f"{first_paper_id}.pdf").exists())
         self.assertTrue((self.server.asset_dir / first_paper_id).exists())
+        self.assertEqual(len(list(self.server.upload_dir.glob("*.pdf"))), 1)
         status, trash_data, _ = self.request("GET", "/api/trash")
         self.assertEqual(status, 200)
-        self.assertIn(first_paper_id, {item["id"] for item in trash_data["papers"]})
+        self.assertNotIn(first_paper_id, {item["id"] for item in trash_data["papers"]})
+
+        with patch(
+            "backend.app.extract_pdf",
+            side_effect=AssertionError("same filename must be skipped before PDF parsing"),
+        ):
+            status, filename_duplicate, _ = self.request(
+                "POST",
+                "/api/papers",
+                body,
+                {"Content-Type": content_type, "Content-Length": str(len(body))},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(filename_duplicate["duplicate_skipped"])
+        self.assertEqual(filename_duplicate["paper"]["id"], first_paper_id)
+        self.assertIsNone(
+            self.server.db.find_active_paper_by_filename(
+                "paper.pdf", len(buffer.getvalue()) + 1
+            )
+        )
 
         asset = paper["visual_assets"][0]
         asset_connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -543,6 +599,10 @@ class ApiTestCase(unittest.TestCase):
             self.assertEqual(status, 502)
             self.assertEqual(failed_data["paper"]["summary_status"], "translation_error")
             self.assertEqual(
+                failed_data["paper"]["summary_translation_error_code"],
+                "translation_structure_error",
+            )
+            self.assertEqual(
                 failed_data["paper"]["summary_blocks"][1]["text_en"],
                 "The method uses one retrieval stage.",
             )
@@ -560,6 +620,7 @@ class ApiTestCase(unittest.TestCase):
                 )
             self.assertEqual(status, 200)
             self.assertEqual(translated_data["paper"]["summary_status"], "ready")
+            self.assertEqual(translated_data["paper"]["summary_translation_error_code"], "")
             self.assertEqual(
                 translated_data["paper"]["summary_blocks"][1]["text_zh"],
                 "该方法使用一个检索阶段。",

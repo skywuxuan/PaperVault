@@ -12,6 +12,7 @@ from backend.deep_summary import (
     prepare_page_documents,
     translate_report_blocks,
 )
+from backend.llm import SummaryError
 
 
 def settings(**overrides: str) -> dict[str, str]:
@@ -129,6 +130,78 @@ class DeepSummaryStructureTestCase(unittest.TestCase):
         self.assertEqual(metadata["input_mode"], "full")
         self.assertEqual(request.call_count, 2)
         self.assertTrue(all(call.kwargs["task"] == "analysis" for call in request.call_args_list))
+
+    def test_transient_provider_error_is_retried_before_failing_report(self) -> None:
+        valid = {
+            "paper_title": "Original",
+            "blocks": [
+                {
+                    "id": "paragraph-001",
+                    "type": "paragraph",
+                    "text_en": "Page-grounded evidence.",
+                    "page_refs": [1],
+                }
+            ],
+        }
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=[SummaryError("LLM request failed (503): busy"), completion(valid)],
+        ) as request, patch("backend.deep_summary.time.sleep") as sleep:
+            report, _ = generate_english_report(
+                "Original", [{"page": 1, "text": "Evidence."}], settings()
+            )
+        self.assertEqual(report["blocks"][0]["page_refs"], [1])
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_authentication_error_is_not_retried(self) -> None:
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=SummaryError("LLM request failed (401): unauthorized"),
+        ) as request, patch("backend.deep_summary.time.sleep") as sleep:
+            with self.assertRaises(SummaryError):
+                generate_english_report(
+                    "Original", [{"page": 1, "text": "Evidence."}], settings()
+                )
+        self.assertEqual(request.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_invalid_page_grounding_regenerates_report_once(self) -> None:
+        invalid = {
+            "paper_title": "Original",
+            "blocks": [
+                {
+                    "id": "paragraph-001",
+                    "type": "paragraph",
+                    "text_en": "Unsupported page.",
+                    "page_refs": [99],
+                }
+            ],
+        }
+        valid = {
+            "paper_title": "Original",
+            "blocks": [
+                {
+                    "id": "paragraph-001",
+                    "type": "paragraph",
+                    "text_en": "Supported page.",
+                    "page_refs": [1],
+                }
+            ],
+        }
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=[completion(invalid), completion(valid)],
+        ) as request:
+            report, _ = generate_english_report(
+                "Original", [{"page": 1, "text": "Evidence."}], settings()
+            )
+        self.assertEqual(report["blocks"][0]["text_en"], "Supported page.")
+        self.assertEqual(request.call_count, 2)
+        self.assertIn(
+            "failed structural validation",
+            request.call_args_list[1].args[0]["messages"][1]["content"],
+        )
 
 
 class DeepSummaryTranslationTestCase(unittest.TestCase):
@@ -363,6 +436,40 @@ class DeepSummaryTranslationTestCase(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertEqual(request.call_args.kwargs["task"], "translation")
 
+    def test_large_translation_starts_with_independent_chunks(self) -> None:
+        blocks = [
+            {
+                "id": f"paragraph-{index:03d}",
+                "type": "paragraph",
+                "text_en": f"Block {chr(64 + index)} " + "evidence " * 500,
+                "page_refs": [index],
+            }
+            for index in range(1, 5)
+        ]
+        requested_ids: list[list[str]] = []
+
+        def fake_request(payload: dict, _settings: dict, **_kwargs: object) -> dict:
+            request_data = json.loads(payload["messages"][1]["content"].split("\n\n")[-1])
+            ids = [item["id"] for item in request_data["blocks"]]
+            requested_ids.append(ids)
+            return completion(
+                {
+                    "translations": [
+                        {"id": block_id, "text_zh": "对应译文"}
+                        for block_id in ids
+                    ]
+                }
+            )
+
+        with patch(
+            "backend.deep_summary.request_chat_completion", side_effect=fake_request
+        ) as request:
+            merged, _ = translate_report_blocks(blocks, settings())
+        self.assertGreater(len(requested_ids), 1)
+        self.assertTrue(all(len(ids) < len(blocks) for ids in requested_ids))
+        self.assertEqual(request.call_count, len(requested_ids))
+        self.assertEqual([block["id"] for block in merged], [block["id"] for block in blocks])
+
     def test_translation_fallback_bisects_invalid_batches_to_single_blocks(self) -> None:
         invalid = completion({"translations": []})
         heading = completion(
@@ -377,12 +484,12 @@ class DeepSummaryTranslationTestCase(unittest.TestCase):
         )
         with patch(
             "backend.deep_summary.request_chat_completion",
-            side_effect=[invalid, invalid, invalid, invalid, heading, paragraph],
+            side_effect=[invalid, invalid, heading, paragraph],
         ) as request:
             merged, _ = translate_report_blocks(self.blocks, settings())
         self.assertEqual(merged[0]["text_zh"], "评测结果")
         self.assertEqual(merged[1]["text_zh"], "WER 从 12.5% 改善到 9.1%。")
-        self.assertEqual(request.call_count, 6)
+        self.assertEqual(request.call_count, 4)
         final_payloads = [
             json.loads(call.args[0]["messages"][1]["content"].split("\n\n")[-1])
             for call in request.call_args_list[-2:]

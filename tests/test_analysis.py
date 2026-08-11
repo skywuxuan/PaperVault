@@ -61,7 +61,11 @@ class DatabaseMigrationTestCase(unittest.TestCase):
             self.assertEqual(paper["summary_translation_status"], "none")
             self.assertEqual(paper["read_state"], "unread")
             with database.connect() as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+                title_key = connection.execute(
+                    "SELECT title_key FROM papers WHERE id = 'legacy-paper'"
+                ).fetchone()[0]
+                self.assertEqual(title_key, "legacytitle")
 
     def test_chunks_and_running_jobs_survive_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

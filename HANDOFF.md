@@ -19,7 +19,7 @@ Windows desktop development startup:
 Desktop health response:
 
 ```json
-{"status":"ok","version":"2.1.0"}
+{"status":"ok","version":"2.1.1"}
 ```
 
 The desktop shell chooses an ephemeral localhost port. The legacy browser mode
@@ -119,7 +119,7 @@ Current model configuration:
 
 ```text
 provider: openai_compatible
-base_url: https://api.deepseek.com
+base_url: https://apifusion.aispeech.com.cn/v1
 model: deepseek-v4-flash
 analysis_model: empty (inherits model)
 translation_model: empty (inherits model)
@@ -129,13 +129,23 @@ api_key: stored locally, masked by API
 ```
 
 For the official DeepSeek host and `deepseek-v4*` models, English deep analysis
-enables thinking with `high` effort (or user-selected `max`). Translation and
-JSON repair disable thinking. The adapter reads only final `content` and never
-stores or displays `reasoning_content`. It does not silently change flash to pro.
+enables thinking with `high` effort (or user-selected `max`). The currently
+configured OpenAI-compatible gateway keeps its own provider controls instead.
+Translation and JSON repair disable thinking on the official host. The adapter
+reads only final `content` and never stores or displays `reasoning_content`. It
+does not silently change flash to pro.
 
 ## 5. Current Library State
 
-The active library contains 9 distinct physical paper records. Before the 2.1.0
+The active library currently exposes 23 papers and has 10 recoverable records in
+the recycle bin. A 24-file import on 2026-08-11 produced 14 fully completed new
+papers, four visible English-summary failures, three visible translation-only
+failures, and three duplicate upload records that were consolidated. Two older
+complete Step-Audio records were retained over newly failed duplicate attempts.
+No existing paper or summary was regenerated as part of the 2.1.1 reliability
+change.
+
+Before the 2.1.0
 structured-summary migration and user-requested regeneration, the stopped SQLite
 database was copied to:
 
@@ -154,8 +164,9 @@ block. Per-paper block counts are `39, 34, 47, 56, 35, 40, 36, 40, 34` (361 tota
 Aggregate validation found unique IDs and valid PDF page references for all blocks.
 Original PDFs and non-summary paper metadata were not rewritten by regeneration.
 
-The active database is schema version 3 with analysis jobs/runs, page chunks, read
-state, recycle-bin fields, and structured deep-summary columns. Legacy
+The active database migrates additively to schema version 4 with indexed normalized
+title keys and safe summary error codes, in addition to analysis jobs/runs, page
+chunks, read state, recycle-bin fields, and structured deep-summary columns. Legacy
 `summary_pairs` remains a supported read path for older databases and tests.
 Automated tests must continue to use temporary data directories.
 
@@ -168,9 +179,14 @@ Automated tests must continue to use temporary data directories.
 - PDF title, author, year, page count, text, and visual-page extraction.
 - Optional common tags and automatic summary generation during batch import.
 - Local SQLite persistence across restarts.
-- Duplicate consolidation by normalized PDF paper title.
-- A newer successful duplicate replaces older failed/poorer records while preserving the union of tags and the highest rating.
-- Duplicate records are moved to the recoverable recycle bin; their PDFs and extracted assets are retained.
+- Duplicate checks are performed before asset extraction and model calls: exact
+  active filenames use an index-only lookup, while renamed files are locally parsed
+  once and checked through an indexed normalized paper-title key.
+- An existing active title is returned with `duplicate_skipped=true`; its PDF,
+  metadata, tags, and summaries are not replaced or regenerated.
+- Post-save consolidation remains as a concurrency safety net. A complete bilingual
+  summary outranks a newer English-only or failed duplicate, preventing the previous
+  WEST-style regression. Consolidated records remain recoverable in the recycle bin.
 
 ### Detailed bilingual summary
 
@@ -184,6 +200,14 @@ Automated tests must continue to use temporary data directories.
 - English blocks are saved immediately with status `english_ready`; translation is a second call containing only block id/type/English text and is merged strictly by stable id.
 - Translation failure leaves the English report visible as `translation_error`; `POST /translate-summary` retries Chinese only and never reruns English analysis.
 - Translation validation requires identical numeric token values and multiplicities while allowing complete clauses to move into natural Chinese order. Targeted retries protect numbers with stable labels, restore each label to its own original value, and can fall back to sentence or nonnumeric text-span translation without guessing numbers.
+- Transient 408/409/425/429, 5xx, connection, timeout, missing-content, and
+  reasoning-only responses receive bounded backoff retries. Authentication and
+  balance errors are never retried.
+- English reports that still fail JSON, evidence-block, or page-reference validation
+  are regenerated once with the validation reason. Long Chinese reports are split
+  before the first translation call into 2,400-token input chunks, run with at most
+  two workers, and retry or bisect only failed chunks. Per-chunk output limits are
+  derived from actual input size instead of always requesting 32K output tokens.
 - Chinese characters adjacent to Arabic numbers are handled correctly; safe API error codes distinguish numeric, ID/order, invalid-JSON, and truncated-output failures without exposing paper content.
 - Truncated English output is continued after the last complete block and merged; incomplete JSON is never accepted. JSON repair runs with thinking disabled.
 - Reader rendering is an unframed long document. Consecutive bullets form one list, page buttons jump to PDF, and clicking either language block aligns its counterpart to the same viewport height.
@@ -408,13 +432,16 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-56 tests passed
+62 tests passed
 JavaScript syntax check passed
-Windows PyInstaller `onedir` build passed
-Packaged frontend contains the updated compact library layout and overview-QA backend
-1440x900 and 390x844 browser layout/screenshot QA passed against the running 9-paper library without data writes
-Desktop status/metadata lines, 56-71 px collapsed rows, expanded author details, and responsive overflow were exercised
-No browser console warnings or errors in the final check
+Temporary-data API coverage confirms filename/title duplicate short-circuiting,
+schema-v4 migration, complete-summary quality ordering, transient retry behavior,
+structural report recovery, and independent translation chunks.
+The upload dialog was checked in the in-app browser against a temporary empty data
+directory; layout was intact and there were no browser console warnings or errors.
+Windows PyInstaller `onedir` build passed. The packaged executable reports
+`FileVersion` and `ProductVersion` 2.1.1, and the bundled frontend contains the
+new duplicate-skip response handling.
 ```
 
 The API tests use a temporary data directory and do not alter the real library.
@@ -450,5 +477,5 @@ Use this as the first message in the next development conversation:
 请先完整阅读：
 C:\Users\skywu\Documents\Codex\PaperVault\HANDOFF.md
 
-继续开发 PaperVault 2.1.0。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出或复制 API Key。真实库最近观察为 9 条记录，不要按旧交接强制改回 4 条。沿用现有 `/api/*`、`summary_blocks` + legacy `summary_pairs` 兼容层、持久化分析任务、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
+继续开发 PaperVault 2.1.1。先检查 Git 工作区、桌面构建状态和当前服务进程，不要重置、迁移或覆盖任何真实 data 目录，也不要输出或复制 API Key。真实库最近观察为 23 条可见记录和 10 条可恢复回收站记录，不要按旧交接强制改回较小数量。沿用现有 `/api/*`、`summary_blocks` + legacy `summary_pairs` 兼容层、持久化分析任务、pywebview 平台边界、Hugging Face 风格 UI 和测试方式，然后处理我接下来提出的需求。
 ```

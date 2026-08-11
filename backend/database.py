@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 SCHEMA = """
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS papers (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
+    title_key TEXT NOT NULL DEFAULT '',
     authors TEXT NOT NULL DEFAULT '',
     publication_year INTEGER,
     doi TEXT NOT NULL DEFAULT '',
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS papers (
     summary_paper_title TEXT NOT NULL DEFAULT '',
     summary_translation_status TEXT NOT NULL DEFAULT 'none',
     summary_translation_error TEXT NOT NULL DEFAULT '',
+    summary_translation_error_code TEXT NOT NULL DEFAULT '',
     summary_analysis_model TEXT NOT NULL DEFAULT '',
     summary_translation_model TEXT NOT NULL DEFAULT '',
     summary_prompt_version TEXT NOT NULL DEFAULT '',
@@ -45,6 +48,7 @@ CREATE TABLE IF NOT EXISTS papers (
     summary_provider TEXT NOT NULL DEFAULT '',
     summary_model TEXT NOT NULL DEFAULT '',
     summary_error TEXT NOT NULL DEFAULT '',
+    summary_error_code TEXT NOT NULL DEFAULT '',
     rating INTEGER NOT NULL DEFAULT 0 CHECK(rating BETWEEN 0 AND 3),
     read_state TEXT NOT NULL DEFAULT 'unread' CHECK(read_state IN ('unread', 'read')),
     deleted_at TEXT,
@@ -190,6 +194,11 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def normalize_title_key(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
 class Database:
     def __init__(self, path: Path):
         self.path = path
@@ -234,9 +243,11 @@ class Database:
                 "summary_paper_title": "TEXT NOT NULL DEFAULT ''",
                 "summary_translation_status": "TEXT NOT NULL DEFAULT 'none'",
                 "summary_translation_error": "TEXT NOT NULL DEFAULT ''",
+                "summary_translation_error_code": "TEXT NOT NULL DEFAULT ''",
                 "summary_analysis_model": "TEXT NOT NULL DEFAULT ''",
                 "summary_translation_model": "TEXT NOT NULL DEFAULT ''",
                 "summary_prompt_version": "TEXT NOT NULL DEFAULT ''",
+                "summary_error_code": "TEXT NOT NULL DEFAULT ''",
             }
             for column, declaration in summary_columns.items():
                 if column not in columns:
@@ -253,6 +264,26 @@ class Database:
                 )
             if "deleted_at" not in columns:
                 connection.execute("ALTER TABLE papers ADD COLUMN deleted_at TEXT")
+            if "title_key" not in columns:
+                connection.execute(
+                    "ALTER TABLE papers ADD COLUMN title_key TEXT NOT NULL DEFAULT ''"
+                )
+            for row in connection.execute("SELECT id, title, title_key FROM papers").fetchall():
+                title_key = normalize_title_key(row["title"])
+                if str(row["title_key"] or "") != title_key:
+                    connection.execute(
+                        "UPDATE papers SET title_key = ? WHERE id = ?",
+                        (title_key, row["id"]),
+                    )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_papers_title_key ON papers(title_key, deleted_at)"
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_papers_original_filename
+                ON papers(original_filename COLLATE NOCASE, deleted_at)
+                """
+            )
             try:
                 connection.execute(
                     """
@@ -495,21 +526,62 @@ class Database:
                 return None
             return self._paper_dict(connection, row, include_text=include_text)
 
+    def find_active_paper_by_title(self, title: str) -> dict[str, Any] | None:
+        title_key = normalize_title_key(title)
+        if not title_key:
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id FROM papers
+                WHERE title_key = ? AND deleted_at IS NULL
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (title_key,),
+            ).fetchone()
+        return self.get_paper(str(row["id"])) if row is not None else None
+
+    def find_active_paper_by_filename(
+        self, filename: str, file_size: int | None = None
+    ) -> dict[str, Any] | None:
+        normalized = Path(filename).name[:500]
+        if not normalized:
+            return None
+        size_clause = " AND file_size = ?" if file_size is not None else ""
+        parameters: tuple[Any, ...] = (
+            (normalized, int(file_size)) if file_size is not None else (normalized,)
+        )
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT id FROM papers
+                WHERE original_filename = ? COLLATE NOCASE
+                  AND deleted_at IS NULL{size_clause}
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                parameters,
+            ).fetchone()
+        return self.get_paper(str(row["id"])) if row is not None else None
+
     def insert_paper(self, paper: dict[str, Any], tag_ids: list[str]) -> dict[str, Any]:
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO papers(
-                    id, title, authors, publication_year, doi, original_filename,
+                    id, title, title_key, authors, publication_year, doi, original_filename,
                     stored_filename, file_size, page_count, extracted_text,
                     summary_pairs, summary_blocks, summary_paper_title, summary_translation_status,
-                    summary_translation_error, summary_analysis_model, summary_translation_model,
+                    summary_translation_error, summary_translation_error_code,
+                    summary_analysis_model, summary_translation_model,
                     summary_prompt_version, visual_assets, summary_status, summary_provider,
-                    summary_model, summary_error, rating, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    summary_model, summary_error, summary_error_code, rating, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    paper["id"], paper["title"], paper.get("authors", ""),
+                    paper["id"], paper["title"], normalize_title_key(paper["title"]),
+                    paper.get("authors", ""),
                     paper.get("publication_year"), paper.get("doi", ""),
                     paper["original_filename"], paper["stored_filename"],
                     paper.get("file_size", 0), paper.get("page_count", 0),
@@ -519,6 +591,7 @@ class Database:
                     paper.get("summary_paper_title", ""),
                     paper.get("summary_translation_status", "none"),
                     paper.get("summary_translation_error", ""),
+                    paper.get("summary_translation_error_code", ""),
                     paper.get("summary_analysis_model", ""),
                     paper.get("summary_translation_model", ""),
                     paper.get("summary_prompt_version", ""),
@@ -526,6 +599,7 @@ class Database:
                     paper.get("summary_status", "pending"),
                     paper.get("summary_provider", ""), paper.get("summary_model", ""),
                     paper.get("summary_error", ""),
+                    paper.get("summary_error_code", ""),
                     paper.get("rating", 0),
                     paper["created_at"], paper["updated_at"],
                 ),
@@ -539,9 +613,10 @@ class Database:
         allowed = {
             "title", "authors", "publication_year", "doi", "rating", "read_state",
             "summary_pairs", "summary_blocks", "summary_paper_title", "summary_translation_status",
-            "summary_translation_error", "summary_analysis_model", "summary_translation_model",
+            "summary_translation_error", "summary_translation_error_code",
+            "summary_analysis_model", "summary_translation_model",
             "summary_prompt_version", "visual_assets", "summary_status", "summary_provider",
-            "summary_model", "summary_error",
+            "summary_model", "summary_error", "summary_error_code",
         }
         updates: list[str] = []
         values: list[Any] = []
@@ -554,6 +629,9 @@ class Database:
                 if key in {"summary_pairs", "summary_blocks", "visual_assets"}
                 else value
             )
+            if key == "title":
+                updates.append("title_key = ?")
+                values.append(normalize_title_key(value))
         updates.append("updated_at = ?")
         values.append(utc_now())
         values.append(paper_id)
@@ -1130,6 +1208,7 @@ class Database:
             latest_jobs.setdefault(str(job["job_type"]), job)
         data["analysis_jobs"] = latest_jobs
         data["text_length"] = len(data.get("extracted_text", ""))
+        data.pop("title_key", None)
         if not include_text:
             data.pop("extracted_text", None)
         return data

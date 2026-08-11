@@ -11,7 +11,6 @@ import sqlite3
 import sys
 import threading
 import time
-import unicodedata
 import uuid
 from email.parser import BytesParser
 from email.policy import default
@@ -35,7 +34,7 @@ from .analysis import (
     provider_available,
     representative_chunks,
 )
-from .database import Database, utc_now
+from .database import Database, normalize_title_key, utc_now
 from .deep_summary import (
     DEEP_SUMMARY_PROMPT_VERSION,
     analysis_model,
@@ -734,6 +733,28 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         if not filename.lower().endswith(".pdf") or not file_bytes.startswith(b"%PDF-"):
             self.send_error_json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Only valid PDF files are accepted")
             return
+        supplied_title = fields.get("title", "").strip()
+        if supplied_title:
+            duplicate = self.server.db.find_active_paper_by_title(supplied_title)
+            if duplicate is not None:
+                self.send_json(
+                    {
+                        "paper": duplicate,
+                        "duplicate_skipped": True,
+                        "deduplicated_count": 0,
+                    }
+                )
+                return
+        duplicate = self.server.db.find_active_paper_by_filename(filename, len(file_bytes))
+        if duplicate is not None:
+            self.send_json(
+                {
+                    "paper": duplicate,
+                    "duplicate_skipped": True,
+                    "deduplicated_count": 0,
+                }
+            )
+            return
         paper_id = str(uuid.uuid4())
         stored_filename = f"{paper_id}.pdf"
         destination = self.server.upload_dir / stored_filename
@@ -744,7 +765,18 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             destination.unlink(missing_ok=True)
             self.send_error_json(HTTPStatus.UNPROCESSABLE_ENTITY, f"PDF parsing failed: {exc}")
             return
-        title = fields.get("title", "").strip() or parsed["title"] or infer_title(parsed["text"], filename)
+        title = supplied_title or parsed["title"] or infer_title(parsed["text"], filename)
+        duplicate = self.server.db.find_active_paper_by_title(title)
+        if duplicate is not None:
+            destination.unlink(missing_ok=True)
+            self.send_json(
+                {
+                    "paper": duplicate,
+                    "duplicate_skipped": True,
+                    "deduplicated_count": 0,
+                }
+            )
+            return
         authors = fields.get("authors", "").strip() or parsed["author"]
         try:
             year = parse_year(fields.get("publication_year", "")) or infer_publication_year(
@@ -769,7 +801,11 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 summary_status = "draft"
             except SummaryError as exc:
                 summary_status = "error"
-                summary_error, _ = friendly_model_error(str(exc))
+                summary_error, summary_error_code = friendly_model_error(str(exc))
+            else:
+                summary_error_code = ""
+        else:
+            summary_error_code = ""
         paper = {
             "id": paper_id,
             "title": title[:500],
@@ -786,6 +822,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             "summary_paper_title": "",
             "summary_translation_status": "none",
             "summary_translation_error": "",
+            "summary_translation_error_code": "",
             "summary_analysis_model": "",
             "summary_translation_model": "",
             "summary_prompt_version": "",
@@ -794,6 +831,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             "summary_provider": summary_provider,
             "summary_model": summary_model,
             "summary_error": summary_error,
+            "summary_error_code": summary_error_code,
             "rating": 0,
             "created_at": now,
             "updated_at": now,
@@ -808,35 +846,48 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         if generate_requested and settings.get("provider") == "openai_compatible":
             self.server.db.update_paper(
                 paper_id,
-                {"summary_status": "generating", "summary_error": ""},
+                {
+                    "summary_status": "generating",
+                    "summary_error": "",
+                    "summary_error_code": "",
+                },
                 None,
             )
             try:
                 result = self._generate_english_summary(paper_id, settings)
             except SummaryError as exc:
-                message, _ = friendly_model_error(str(exc))
+                message, error_code = friendly_model_error(str(exc))
                 result = self.server.db.update_paper(
                     paper_id,
-                    {"summary_status": "error", "summary_error": message},
+                    {
+                        "summary_status": "error",
+                        "summary_error": message,
+                        "summary_error_code": error_code,
+                    },
                     None,
                 )
             else:
                 try:
                     result = self._translate_summary_blocks(paper_id, settings)
                 except SummaryError as exc:
-                    message, _ = friendly_model_error(str(exc))
+                    message, error_code = friendly_model_error(str(exc))
                     result = self.server.db.update_paper(
                         paper_id,
                         {
                             "summary_status": "translation_error",
                             "summary_translation_status": "error",
                             "summary_translation_error": message,
+                            "summary_translation_error_code": error_code,
                         },
                         None,
                     )
         result, deduplicated_count = self.server.consolidate_paper_duplicates(paper_id)
         self.send_json(
-            {"paper": result, "deduplicated_count": deduplicated_count},
+            {
+                "paper": result,
+                "duplicate_skipped": False,
+                "deduplicated_count": deduplicated_count,
+            },
             HTTPStatus.CREATED,
         )
 
@@ -868,6 +919,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 )
                 fields["summary_model"] = ""
                 fields["summary_error"] = ""
+                fields["summary_error_code"] = ""
             tag_ids = parse_tag_ids(payload.get("tag_ids")) if "tag_ids" in payload else None
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -1009,7 +1061,11 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             return
         self.server.db.update_paper(
             paper_id,
-            {"summary_status": "generating", "summary_error": ""},
+            {
+                "summary_status": "generating",
+                "summary_error": "",
+                "summary_error_code": "",
+            },
             None,
         )
         try:
@@ -1019,7 +1075,11 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             previous_status = self._restored_summary_status(paper)
             updated = self.server.db.update_paper(
                 paper_id,
-                {"summary_status": previous_status, "summary_error": message},
+                {
+                    "summary_status": previous_status,
+                    "summary_error": message,
+                    "summary_error_code": error_code,
+                },
                 None,
             )
             self.send_json(
@@ -1047,6 +1107,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 "summary_status": "translating",
                 "summary_translation_status": "translating",
                 "summary_translation_error": "",
+                "summary_translation_error_code": "",
             },
             None,
         )
@@ -1060,6 +1121,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                     "summary_status": "translation_error",
                     "summary_translation_status": "error",
                     "summary_translation_error": message,
+                    "summary_translation_error_code": error_code,
                 },
                 None,
             )
@@ -1095,7 +1157,9 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 "summary_prompt_version": DEEP_SUMMARY_PROMPT_VERSION,
                 "summary_translation_status": "pending",
                 "summary_translation_error": "",
+                "summary_translation_error_code": "",
                 "summary_error": "",
+                "summary_error_code": "",
             },
             None,
         )
@@ -1122,6 +1186,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 "summary_status": "ready",
                 "summary_translation_status": "ready",
                 "summary_translation_error": "",
+                "summary_translation_error_code": "",
                 "summary_translation_model": metadata["model"],
             },
             None,
@@ -1613,16 +1678,24 @@ def validate_annotation_color(value: Any) -> str:
 
 
 def normalize_paper_title(value: Any) -> str:
-    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    return "".join(character for character in normalized if character.isalnum())
+    return normalize_title_key(value)
 
 
 def paper_quality_key(paper: dict[str, Any]) -> tuple[int, str, str]:
-    has_summary = bool(paper.get("summary_blocks") or paper.get("summary_pairs")) and paper.get(
-        "summary_status"
-    ) in {"ready", "draft", "edited", "english_ready", "translating", "translation_error"}
+    blocks = [block for block in paper.get("summary_blocks", []) if isinstance(block, dict)]
+    pairs = [pair for pair in paper.get("summary_pairs", []) if isinstance(pair, dict)]
+    summary_rank = 0
+    if pairs:
+        summary_rank = 4
+    if blocks:
+        summary_rank = max(summary_rank, 3)
+        has_complete_translation = paper.get("summary_translation_status") == "ready" and all(
+            str(block.get("text_zh", "")).strip() for block in blocks
+        )
+        if has_complete_translation:
+            summary_rank = 5
     return (
-        int(has_summary),
+        summary_rank,
         str(paper.get("updated_at", "")),
         str(paper.get("created_at", "")),
     )
@@ -1635,10 +1708,34 @@ def friendly_model_error(message: str) -> tuple[str, str]:
             "中文翻译未通过数字一致性校验，英文报告已保留。请重新翻译。",
             "translation_numeric_mismatch",
         )
-    if "translation block ids or order" in lowered or "translations array" in lowered:
+    if (
+        "translation block ids or order" in lowered
+        or "translation response ids" in lowered
+        or "translations array" in lowered
+    ):
         return (
             "中文翻译的段落 ID 或顺序不完整，英文报告已保留。请重新翻译。",
             "translation_structure_error",
+        )
+    if "page-grounded" in lowered or "valid page references" in lowered:
+        return (
+            "模型返回的摘要缺少有效正文或页码引用，自动重试后仍未通过校验。",
+            "summary_evidence_validation_error",
+        )
+    if "(429)" in lowered or "rate limit" in lowered or "too many requests" in lowered:
+        return (
+            "模型服务当前繁忙或受到限流，自动重试后仍未成功。请稍后重试。",
+            "model_rate_limited",
+        )
+    if any(f"({status})" in lowered for status in (500, 502, 503, 504)):
+        return (
+            "模型服务暂时异常，自动重试后仍未成功。请稍后重试。",
+            "model_service_error",
+        )
+    if "chat completion content" in lowered or "reasoning_content only" in lowered:
+        return (
+            "模型没有返回可用的最终内容，自动重试后仍未成功。请稍后重试。",
+            "model_empty_response",
         )
     if "invalid json" in lowered or "non-object json" in lowered:
         return (

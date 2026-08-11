@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from backend.llm import SummaryError, request_chat_completion
@@ -12,6 +14,9 @@ from backend.llm import SummaryError, request_chat_completion
 DEEP_SUMMARY_PROMPT_VERSION = "deep-summary-blocks-v1"
 MAX_REPORT_OUTPUT_TOKENS = 32000
 TRANSLATION_OUTPUT_TOKENS = 32000
+TRANSLATION_CHUNK_TOKENS = 2400
+TRANSLATION_MAX_WORKERS = 2
+REQUEST_RETRY_DELAYS = (0.5, 1.5)
 
 
 ENGLISH_REPORT_PROMPT = """You are a senior research scientist writing a complete, detailed and readable
@@ -310,31 +315,35 @@ def translate_report_blocks(
     if not blocks:
         raise SummaryError("No English report blocks are available for translation")
     model = translation_model(settings)
+    chunks = _translation_chunks(blocks)
+    chunk_results: list[tuple[list[dict[str, str]], int] | None] = [None] * len(chunks)
+    if len(chunks) == 1:
+        chunk_results[0] = _translate_chunk_resilient(chunks[0], settings, model, "")
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(TRANSLATION_MAX_WORKERS, len(chunks)),
+            thread_name_prefix="paper-translation",
+        ) as executor:
+            futures = {
+                executor.submit(_translate_chunk_resilient, chunk, settings, model, ""): index
+                for index, chunk in enumerate(chunks)
+            }
+            try:
+                for future in as_completed(futures):
+                    chunk_results[futures[future]] = future.result()
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise
+
+    translations: list[dict[str, str]] = []
     usage_total = 0
-    translations: list[dict[str, str]] | None = None
-    validation_error = ""
-    for _ in range(2):
-        result = _request_translation(blocks, settings, model, validation_error)
-        usage_total += _usage_tokens(result.get("usage", {}))
-        if _is_truncated(result.get("finish_reason")):
-            validation_error = "The previous translation was truncated. Return every requested block."
-            continue
-        try:
-            translations, correction_usage = _accept_translation_candidate(
-                result["content"], blocks, settings, model
-            )
-            usage_total += correction_usage
-            break
-        except SummaryError as exc:
-            validation_error = str(exc)
-    if translations is None:
-        translations = []
-        for chunk in _translation_chunks(blocks):
-            chunk_translations, chunk_usage = _translate_chunk_resilient(
-                chunk, settings, model, validation_error
-            )
-            usage_total += chunk_usage
-            translations.extend(chunk_translations)
+    for result in chunk_results:
+        if result is None:
+            raise SummaryError("Chinese translation did not complete every report chunk")
+        chunk_translations, chunk_usage = result
+        translations.extend(chunk_translations)
+        usage_total += chunk_usage
 
     by_id = {item["id"]: item["text_zh"] for item in translations}
     merged = [{**block, "text_zh": by_id[block["id"]]} for block in blocks]
@@ -393,6 +402,40 @@ def normalize_report(
 
 
 def _request_report(
+    title: str,
+    source: str,
+    system_prompt: str,
+    settings: dict[str, str],
+    model: str,
+    valid_pages: set[int],
+    user_prefix: str = "",
+) -> tuple[dict[str, Any], int]:
+    retry_prefix = user_prefix
+    for attempt in range(2):
+        try:
+            return _request_report_once(
+                title,
+                source,
+                system_prompt,
+                settings,
+                model,
+                valid_pages,
+                retry_prefix,
+            )
+        except SummaryError as exc:
+            if attempt or not _is_report_validation_error(str(exc)):
+                raise
+            retry_prefix = "\n\n".join(
+                part for part in (
+                    user_prefix,
+                    "A previous report failed structural validation: "
+                    f"{exc}. Regenerate the complete report with valid page-grounded blocks.",
+                ) if part
+            )
+    raise SummaryError("English report failed structural validation")
+
+
+def _request_report_once(
     title: str,
     source: str,
     system_prompt: str,
@@ -461,13 +504,18 @@ def _request_translation(
         ]
     }
     prefix = f"The previous response failed validation: {validation_error}\n\n" if validation_error else ""
+    serialized_payload = json.dumps(payload, ensure_ascii=False)
+    output_tokens = min(
+        TRANSLATION_OUTPUT_TOKENS,
+        max(2048, estimate_tokens(serialized_payload) * 3),
+    )
     return _chat_json(
         TRANSLATION_PROMPT,
-        prefix + json.dumps(payload, ensure_ascii=False),
+        prefix + serialized_payload,
         settings,
         model,
         "translation",
-        TRANSLATION_OUTPUT_TOKENS,
+        output_tokens,
         600,
     )
 
@@ -492,7 +540,14 @@ def _chat_json(
     }
     if task != "analysis":
         payload["temperature"] = 0.1
-    return request_chat_completion(payload, settings, timeout=timeout, task=task)
+    for attempt in range(len(REQUEST_RETRY_DELAYS) + 1):
+        try:
+            return request_chat_completion(payload, settings, timeout=timeout, task=task)
+        except SummaryError as exc:
+            if attempt >= len(REQUEST_RETRY_DELAYS) or not _is_retryable_request_error(str(exc)):
+                raise
+            time.sleep(REQUEST_RETRY_DELAYS[attempt])
+    raise SummaryError("LLM request retry loop ended unexpectedly")
 
 
 def _parse_or_repair_json(content: str, settings: dict[str, str], model: str) -> dict[str, Any]:
@@ -824,7 +879,7 @@ def _translation_chunks(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any
     chunks: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
     current_tokens = 0
-    limit = 3000
+    limit = TRANSLATION_CHUNK_TOKENS
     for block in blocks:
         block_tokens = estimate_tokens(block["text_en"]) + 20
         if current and current_tokens + block_tokens > limit:
@@ -975,6 +1030,37 @@ def _page_labels(text: str) -> set[int]:
 
 def _is_truncated(finish_reason: Any) -> bool:
     return str(finish_reason or "").casefold() in {"length", "max_tokens"}
+
+
+def _is_retryable_request_error(message: str) -> bool:
+    lowered = message.casefold()
+    retryable_statuses = (408, 409, 425, 429, 500, 502, 503, 504)
+    return any(f"({status})" in lowered for status in retryable_statuses) or any(
+        marker in lowered
+        for marker in (
+            "timed out",
+            "timeout",
+            "connection",
+            "urlopen",
+            "remote end closed",
+            "temporarily unavailable",
+            "chat completion content",
+            "reasoning_content only",
+        )
+    )
+
+
+def _is_report_validation_error(message: str) -> bool:
+    lowered = message.casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "invalid json",
+            "non-object json",
+            "no page-grounded report content blocks",
+            "without valid page references",
+        )
+    )
 
 
 def _usage_tokens(usage: Any) -> int:

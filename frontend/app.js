@@ -2545,6 +2545,9 @@ async function handleUpload(event) {
   const successes = [];
   const failures = [];
   let deduplicated = 0;
+  let skippedDuplicates = 0;
+  let englishFailures = 0;
+  let translationFailures = 0;
   const tagIds = $$("#uploadTagPicker input:checked").map((input) => input.value);
   for (let index = 0; index < files.length; index += 1) {
     const file = files[index];
@@ -2562,7 +2565,18 @@ async function handleUpload(event) {
       const result = await api("/api/papers", { method: "POST", body: data });
       successes.push(result.paper);
       deduplicated += Number(result.deduplicated_count) || 0;
-      setUploadFileStatus(index, "success", result.paper.summary_status === "error" ? "已导入，摘要失败" : "导入完成");
+      if (result.duplicate_skipped) {
+        skippedDuplicates += 1;
+        setUploadFileStatus(index, "success", "论文已存在，已跳过");
+      } else if (result.paper.summary_status === "error") {
+        englishFailures += 1;
+        setUploadFileStatus(index, "error", `已导入，英文摘要失败：${result.paper.summary_error || "模型生成失败"}`);
+      } else if (result.paper.summary_status === "translation_error") {
+        translationFailures += 1;
+        setUploadFileStatus(index, "error", `已导入，英文完成，中文失败：${result.paper.summary_translation_error || "翻译失败"}`);
+      } else {
+        setUploadFileStatus(index, "success", "导入完成");
+      }
     } catch (error) {
       failures.push({ file, message: error.message });
       setUploadFileStatus(index, "error", error.message || "导入失败");
@@ -2583,9 +2597,13 @@ async function handleUpload(event) {
     return;
   }
   closeDialog("uploadDialog");
-  toast(deduplicated
-    ? `${successes.length} 篇导入完成，并合并 ${deduplicated} 条同名旧记录`
-    : `${successes.length} 篇论文已导入本地资料库`);
+  const imported = successes.length - skippedDuplicates;
+  const issueCount = englishFailures + translationFailures;
+  const summary = [`${imported} 篇已导入`];
+  if (skippedDuplicates) summary.push(`${skippedDuplicates} 篇同名论文已跳过`);
+  if (deduplicated) summary.push(`合并 ${deduplicated} 条并发重复记录`);
+  if (issueCount) summary.push(`${issueCount} 篇摘要待重试`);
+  toast(summary.join("，"), issueCount ? "error" : "success");
   if (successes.length === 1) navigateToPaper(successes[0].id);
   else location.hash = "";
 }
