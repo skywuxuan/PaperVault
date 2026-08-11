@@ -372,6 +372,21 @@ function renderLibraryFacets() {
   $$('[data-rating-filter]').forEach((button) => {
     button.classList.toggle("active", button.dataset.ratingFilter === state.ratingFilter);
   });
+  renderAllPapersFilter();
+}
+
+function renderAllPapersFilter() {
+  const button = $(".filter-item[data-tag-id='']");
+  if (!button) return;
+  const active = !(
+    state.query
+    || state.tagId
+    || state.summaryFilter !== "all"
+    || state.ratingFilter !== "all"
+  );
+  button.classList.toggle("active", active);
+  button.setAttribute("aria-pressed", String(active));
+  button.title = active ? "当前显示全部论文" : "清除全部筛选并显示所有论文";
 }
 
 function togglePaperSelection(paperId, selected) {
@@ -662,9 +677,8 @@ function renderTagFilters() {
     container.append(button);
   }
   const allButton = $(".filter-item[data-tag-id='']");
-  allButton.classList.toggle("active", !state.tagId);
-  allButton.setAttribute("aria-pressed", String(!state.tagId));
-  allButton.onclick = () => selectTag("");
+  renderAllPapersFilter();
+  allButton.onclick = resetLibraryFilters;
 }
 
 function renderTagPickers() {
@@ -922,6 +936,7 @@ function resetLibraryFilters() {
   $("#searchInput").value = "";
   clearPaperSelection(false);
   renderTagFilters();
+  renderLibraryFacets();
   loadLibrary().catch(handleError);
 }
 
