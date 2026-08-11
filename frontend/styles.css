@@ -173,7 +173,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .paper-row:last-child { border-bottom: 0; }
 .paper-title-line { display: flex; align-items: flex-start; gap: 8px; }
 .paper-type-mark { flex: 0 0 auto; margin-top: 2px; padding: 3px 4px; border: 1px solid #d7b3ad; border-radius: 3px; background: #fff6f4; color: #a8473b; font-size: 8px; font-weight: 800; }
-.paper-title { margin: 0; max-width: 900px; display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 14px; line-height: 1.34; font-weight: 680; }
+.paper-title { min-width: 0; flex: 1; margin: 0; max-width: 900px; overflow-wrap: anywhere; font-size: 14px; line-height: 1.34; font-weight: 680; }
 .read-state-button { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; margin: 0 0 0 auto; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--blue); cursor: pointer; font-size: 13px; }
 .read-state-button:hover { background: var(--blue-soft); }
 .read-state-button.read { color: #a6b0ac; }

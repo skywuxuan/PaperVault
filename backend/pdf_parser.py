@@ -25,7 +25,7 @@ SPACE_RE = re.compile(r"[ \t]+")
 BLANK_RE = re.compile(r"\n{3,}")
 
 
-def extract_pdf(path: Path) -> dict[str, Any]:
+def extract_pdf(path: Path, original_filename: str | None = None) -> dict[str, Any]:
     reader = PdfReader(str(path))
     pages: list[str] = []
     for page in reader.pages:
@@ -34,10 +34,12 @@ def extract_pdf(path: Path) -> dict[str, Any]:
         pages.append(page_text.strip())
     text = BLANK_RE.sub("\n\n", "\n\n".join(part for part in pages if part)).strip()
     metadata = reader.metadata or {}
-    title = _clean_metadata(metadata.get("/Title"))
+    metadata_title = _clean_metadata(metadata.get("/Title"))
+    inferred_title = infer_title(text, original_filename or path.name)
+    title = _prefer_complete_title(metadata_title, inferred_title)
     author = normalize_pdf_authors(metadata.get("/Author"))
     if not author and pages:
-        author = infer_authors(pages[0], title or infer_title(text, path.name))
+        author = infer_authors(pages[0], title)
     return {
         "text": text,
         "page_count": len(reader.pages),
@@ -59,10 +61,40 @@ def extract_page_texts(path: Path) -> list[dict[str, Any]]:
 
 def infer_title(text: str, filename: str) -> str:
     candidates = [line.strip() for line in text[:5000].splitlines() if line.strip()]
-    for line in candidates[:12]:
+    filename_title = Path(filename).stem.replace("_", " ").strip()
+    filename_key = _title_key(filename_title)
+    for index, line in enumerate(candidates[:12]):
         if 12 <= len(line) <= 240 and not re.match(r"^(abstract|arxiv|doi|http)", line, re.I):
-            return line
-    return Path(filename).stem.replace("_", " ").replace("-", " ").strip()
+            complete = line
+            if filename_key.startswith(_title_key(line)):
+                for continuation in candidates[index + 1 : index + 5]:
+                    if not 2 <= len(continuation) <= 240 or re.match(
+                        r"^(abstract|arxiv|doi|http|keywords?)\b", continuation, re.I
+                    ):
+                        break
+                    proposed = f"{complete} {continuation}".strip()
+                    proposed_key = _title_key(proposed)
+                    if not filename_key.startswith(proposed_key):
+                        break
+                    complete = proposed
+                    if proposed_key == filename_key:
+                        break
+            return complete
+    return filename_title.replace("-", " ").strip()
+
+
+def _prefer_complete_title(metadata_title: str, inferred_title: str) -> str:
+    if not metadata_title:
+        return inferred_title
+    metadata_key = _title_key(metadata_title)
+    inferred_key = _title_key(inferred_title)
+    if inferred_key.startswith(metadata_key) and len(inferred_key) > len(metadata_key):
+        return inferred_title
+    return metadata_title
+
+
+def _title_key(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
 
 
 def infer_publication_year(text: str, filename: str) -> int | None:

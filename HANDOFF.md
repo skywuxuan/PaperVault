@@ -235,6 +235,7 @@ Automated tests must continue to use temporary data directories.
 ### Library and batch operations
 
 - Hugging Face-inspired compact paper list and faceted sidebar; common desktop rows are about 56 px high and all nine current papers fit in a 1440x900 viewport.
+- Paper titles wrap to their complete text instead of being line-clamped. Import passes the original filename into PDF parsing and only joins adjacent first-page title lines while their normalized text remains a prefix of that filename, preventing author lines from being appended.
 - Ratings, summary state, and latest analysis state share the first right-aligned fact line; page count, file size, and import date share the second line.
 - Authors and introductions are collapsed by default under the 11 px `作者总结与简介` disclosure; expanded author and introduction text is also 11 px.
 - Pure publication years and generic PDF metadata are not displayed as authors; future imports reject those values and conservatively infer a likely first-page author line.
@@ -323,7 +324,8 @@ tests/test_analysis.py
 
 tests/test_llm.py
   Summary parsing, glossary/IPA behavior, DeepSeek provider controls,
-  alignment preservation, and publication-year inference.
+  alignment preservation, filename-verified multiline title extraction,
+  and publication-year inference.
 
 desktop/app.py
   Native window, desktop bridge, and localhost backend lifecycle.
@@ -405,7 +407,7 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-53 tests passed
+56 tests passed
 JavaScript syntax check passed
 Windows PyInstaller `onedir` build passed
 Packaged frontend contains the updated compact library layout and overview-QA backend

@@ -11,7 +11,8 @@ from backend.llm import _apply_provider_controls, _parse_pairs, local_draft
 from backend.offline_translation import translate_english_offline
 from backend.pronunciation import american_ipa
 from backend.pdf_parser import (
-    extract_visual_pages, infer_authors, infer_publication_year, normalize_pdf_authors,
+    _prefer_complete_title, extract_pdf, extract_visual_pages, infer_authors,
+    infer_publication_year, infer_title, normalize_pdf_authors,
 )
 
 
@@ -95,6 +96,58 @@ class SummaryFormatTestCase(unittest.TestCase):
         self.assertEqual(
             infer_publication_year("References include work from 2021.", "paper-title-2025.pdf"),
             2025,
+        )
+
+    def test_multiline_title_is_joined_only_while_filename_confirms_it(self) -> None:
+        text = """arXiv:2410.06885v2  [eess.AS]  15 Oct 2024
+F5-TTS: A Fairytaler that Fakes Fluent
+and Faithful Speech with Flow Matching
+Yushen Chen, Zhikang Niu, Ziyang Ma
+Abstract
+Body text."""
+        inferred = infer_title(
+            text,
+            "F5-TTS A Fairytaler that Fakes Fluent and Faithful Speech with Flow Matching.pdf",
+        )
+        self.assertEqual(
+            inferred,
+            "F5-TTS: A Fairytaler that Fakes Fluent and Faithful Speech with Flow Matching",
+        )
+        self.assertNotIn("Yushen Chen", inferred)
+
+    def test_complete_inferred_title_replaces_truncated_pdf_metadata(self) -> None:
+        self.assertEqual(
+            _prefer_complete_title(
+                "Step-Audio: Unified Understanding and",
+                "Step-Audio: Unified Understanding and Generation in Intelligent Speech Interaction",
+            ),
+            "Step-Audio: Unified Understanding and Generation in Intelligent Speech Interaction",
+        )
+        self.assertEqual(
+            _prefer_complete_title("Curated Display Title", "Unrelated inferred title"),
+            "Curated Display Title",
+        )
+
+    def test_pdf_extraction_uses_original_filename_to_verify_title_continuation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pdf_path = Path(temporary) / "stored-uuid.pdf"
+            document = pymupdf.open()
+            page = document.new_page()
+            page.insert_text(
+                (72, 72),
+                "Step-Audio: Unified Understanding and\n"
+                "Generation in Intelligent Speech Interaction\n"
+                "Step-Audio Team\nAbstract",
+            )
+            document.save(pdf_path)
+            document.close()
+            parsed = extract_pdf(
+                pdf_path,
+                "Step-Audio Unified Understanding and Generation in Intelligent Speech Interaction.pdf",
+            )
+        self.assertEqual(
+            parsed["title"],
+            "Step-Audio: Unified Understanding and Generation in Intelligent Speech Interaction",
         )
 
     def test_invalid_year_author_metadata_is_rejected(self) -> None:

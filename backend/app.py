@@ -731,7 +731,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         destination = self.server.upload_dir / stored_filename
         destination.write_bytes(file_bytes)
         try:
-            parsed = extract_pdf(destination)
+            parsed = extract_pdf(destination, filename)
         except Exception as exc:
             destination.unlink(missing_ok=True)
             self.send_error_json(HTTPStatus.UNPROCESSABLE_ENTITY, f"PDF parsing failed: {exc}")
