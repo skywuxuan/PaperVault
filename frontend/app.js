@@ -291,7 +291,7 @@ function renderLibrary() {
     titleLine.append(make("span", "paper-type-mark", "PDF"), make("h2", "paper-title", paper.title), readButton);
     content.append(titleLine);
     const details = make("details", "paper-details");
-    const detailsSummary = make("summary", "paper-details-toggle", "作者与简介");
+    const detailsSummary = make("summary", "paper-details-toggle", "作者总结与简介");
     details.append(
       detailsSummary,
       make("p", "paper-authors", paperAuthorDetails(paper)),
@@ -303,17 +303,21 @@ function renderLibrary() {
     if (paper.tags.length) content.append(classification);
 
     const facts = make("div", "paper-facts");
-    facts.append(ratingControl(paper, "paper-row-rating"));
-    const metrics = make("span", "paper-metrics");
+    const statusLine = make("div", "paper-fact-line paper-status-line");
+    statusLine.append(ratingControl(paper, "paper-row-rating"));
+    const summaryState = make("span", `summary-state ${paper.summary_status || "pending"}`, statusLabels[paper.summary_status] || "待生成");
+    statusLine.append(summaryState);
+    const latestJob = latestPaperJob(paper);
+    if (latestJob) statusLine.append(make("span", `analysis-state ${latestJob.status}`, jobStatusLabel(latestJob)));
+    const metrics = make("div", "paper-fact-line paper-metrics");
     const pages = make("span");
     pages.append(make("strong", "", `${paper.page_count || "-"}`), document.createTextNode(" 页"));
-    metrics.append(pages, make("span", "", formatBytes(paper.file_size)));
-    facts.append(metrics);
-    const summaryState = make("span", `summary-state ${paper.summary_status || "pending"}`, statusLabels[paper.summary_status] || "待生成");
-    facts.append(summaryState);
-    const latestJob = latestPaperJob(paper);
-    if (latestJob) facts.append(make("span", `analysis-state ${latestJob.status}`, jobStatusLabel(latestJob)));
-    facts.append(make("span", "paper-added-date", `入库 ${formatDate(paper.created_at)}`));
+    metrics.append(
+      pages,
+      make("span", "", formatBytes(paper.file_size)),
+      make("span", "paper-added-date", `入库 ${formatDate(paper.created_at)}`),
+    );
+    facts.append(statusLine, metrics);
     row.append(checkboxLabel, content, facts, make("span", "row-arrow", "→"));
     list.append(row);
   }

@@ -206,6 +206,8 @@ Automated tests must continue to use temporary data directories.
 - Page text is split into stable chunks with paper ID, page, section hint, ordinal, and content hash.
 - SQLite FTS5 is used when available, with a local `LIKE` fallback for constrained environments.
 - Questions support current-paper and whole-library scope.
+- Explicit current-paper overview questions such as `这个论文里面说的什么` bypass brittle cross-language keyword matching and use up to eight evenly distributed chunks spanning the paper's beginning, middle, and end.
+- Specific questions continue to use FTS5/`LIKE` retrieval; the overview fallback is deliberately narrow so unrelated or unsupported questions do not receive generic evidence.
 - Model answers are limited to retrieved context and must return at least one valid retrieved source ID.
 - Invalid or invented source IDs are discarded; no OpenAI-compatible configuration returns an explicit unavailable state.
 - Source entries include paper title, page, excerpt, and content hash; the frontend jumps to the cited PDF page.
@@ -232,8 +234,9 @@ Automated tests must continue to use temporary data directories.
 
 ### Library and batch operations
 
-- Hugging Face-inspired compact paper list and faceted sidebar; paper rows remain dense on desktop and narrow windows.
-- Ratings are right-aligned, while authors and introductions are collapsed by default under an explicit details disclosure.
+- Hugging Face-inspired compact paper list and faceted sidebar; common desktop rows are about 56 px high and all nine current papers fit in a 1440x900 viewport.
+- Ratings, summary state, and latest analysis state share the first right-aligned fact line; page count, file size, and import date share the second line.
+- Authors and introductions are collapsed by default under the 11 px `作者总结与简介` disclosure; expanded author and introduction text is also 11 px.
 - Pure publication years and generic PDF metadata are not displayed as authors; future imports reject those values and conservatively infer a likely first-page author line.
 - Search title, author, DOI, summary, and tags.
 - Sort by recent import, rating, publication year, or title.
@@ -315,7 +318,8 @@ tests/test_deep_summary.py
 
 tests/test_analysis.py
   Legacy-schema migration, restart recovery, chunk retrieval, analysis
-  versions, citation filtering, unavailable QA state, and recycle restore.
+  versions, overview-question representative context, citation filtering,
+  unavailable QA state, and recycle restore.
 
 tests/test_llm.py
   Summary parsing, glossary/IPA behavior, DeepSeek provider controls,
@@ -401,12 +405,12 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-52 tests passed
+53 tests passed
 JavaScript syntax check passed
 Windows PyInstaller `onedir` build passed
-Packaged EXE health check returned version 2.1.0 using a temporary data directory
-1440x900 and 390x844 browser interaction/screenshot QA passed against synthetic temporary data
-Structured heading/paragraph/list layout, PDF page links, model settings, and bilingual block alignment (0.2px observed delta) were exercised
+Packaged frontend contains the updated compact library layout and overview-QA backend
+1440x900 and 390x844 browser layout/screenshot QA passed against the running 9-paper library without data writes
+Desktop status/metadata lines, 56-71 px collapsed rows, expanded author details, and responsive overflow were exercised
 No browser console warnings or errors in the final check
 ```
 

@@ -30,7 +30,9 @@ from .analysis import (
     build_text_chunks,
     generate_figure_analysis,
     generate_quick_read,
+    is_paper_overview_question,
     provider_available,
+    representative_chunks,
 )
 from .database import Database, utc_now
 from .deep_summary import (
@@ -644,9 +646,14 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         else:
             for paper in self.server.db.list_papers():
                 self.server.ensure_text_index(paper["id"])
-        chunks = self.server.db.search_paper_chunks(
-            question, str(paper_id) if scope == "paper" else None, limit=8
-        )
+        if scope == "paper" and is_paper_overview_question(question):
+            chunks = representative_chunks(
+                self.server.db.list_paper_chunks(str(paper_id)), limit=8
+            )
+        else:
+            chunks = self.server.db.search_paper_chunks(
+                question, str(paper_id) if scope == "paper" else None, limit=8
+            )
         if not chunks:
             self.send_json(
                 {

@@ -241,6 +241,53 @@ class AnalysisApiTestCase(unittest.TestCase):
         self.assertEqual(answer["prompt_version"], "citation-qa-v1")
         self.server.db.update_settings({"provider": "local"})
 
+    def test_generic_paper_overview_uses_representative_full_paper_context(self) -> None:
+        chunks = build_text_chunks(
+            self.paper_id,
+            [
+                {
+                    "page": page,
+                    "text": f"Page {page} contains distinct evidence for the paper narrative.",
+                }
+                for page in range(1, 11)
+            ],
+        )
+        self.server.db.replace_paper_chunks(self.paper_id, chunks)
+        self.server.db.update_settings(
+            {
+                "provider": "openai_compatible",
+                "base_url": "http://127.0.0.1:9/v1",
+                "model": "test-model",
+                "api_key": "",
+                "max_input_chars": "20000",
+            }
+        )
+        captured_pages: list[int] = []
+
+        def answer_from_context(question, selected_chunks, settings):
+            captured_pages.extend(chunk["page"] for chunk in selected_chunks)
+            return "这篇论文按顺序讨论了其研究问题、方法和结果。", ["S1", "S8"], 21
+
+        with patch("backend.app.answer_with_citations", side_effect=answer_from_context):
+            status, answer = self.request(
+                "POST",
+                "/api/qa",
+                {
+                    "question": "这个论文里面说的什么",
+                    "scope": "paper",
+                    "paper_id": self.paper_id,
+                },
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(captured_pages), 8)
+        self.assertEqual(captured_pages, sorted(captured_pages))
+        self.assertEqual(captured_pages[0], 1)
+        self.assertEqual(captured_pages[-1], 10)
+        self.assertTrue(any(3 <= page <= 8 for page in captured_pages))
+        self.assertEqual([source["page"] for source in answer["sources"]], [1, 10])
+        self.server.db.update_settings({"provider": "local"})
+
     def test_soft_delete_keeps_files_and_can_be_restored(self) -> None:
         upload = self.server.upload_dir / f"{self.paper_id}.pdf"
         upload.write_bytes(b"%PDF-1.4\n")

@@ -32,6 +32,63 @@ QA_PROMPT = """Answer the question using only the supplied source excerpts. Retu
 Do not use outside knowledge, do not invent citations, and state when the excerpts are insufficient."""
 
 
+PAPER_OVERVIEW_PATTERNS = (
+    re.compile(
+        r"^(?:请|请问|麻烦|能否|可以|帮我|给我)?(?:概括|总结|介绍)?(?:一下)?"
+        r"(?:这篇|这个|该|本)?(?:论文|文章)(?:里面|主要|大概)*"
+        r"(?:讲|说|研究|介绍|讨论)(?:的|了|是)?(?:什么|哪些内容)(?:呢)?[？?。！!]*$"
+    ),
+    re.compile(
+        r"^(?:请|请问|麻烦|能否|可以|帮我|给我)?(?:概括|总结|介绍)(?:一下)?"
+        r"(?:这篇|这个|该|本)?(?:论文|文章)[？?。！!]*$"
+    ),
+    re.compile(
+        r"^(?:这篇|这个|该|本)?(?:论文|文章)(?:的)?"
+        r"(?:主要内容|核心内容|核心观点|主旨)(?:是)?(?:什么)?[？?。！!]*$"
+    ),
+)
+
+
+def is_paper_overview_question(question: str) -> bool:
+    compact = re.sub(r"\s+", "", str(question or "").casefold())
+    if any(pattern.fullmatch(compact) for pattern in PAPER_OVERVIEW_PATTERNS):
+        return True
+    english = re.sub(r"\s+", " ", str(question or "").strip().casefold())
+    return bool(
+        re.fullmatch(
+            r"(?:please )?(?:summari[sz]e|overview|introduce) (?:this|the) paper[?.!]*",
+            english,
+        )
+        or re.fullmatch(
+            r"what (?:is|does) (?:this|the) paper (?:about|say|discuss)[?.!]*",
+            english,
+        )
+        or re.fullmatch(
+            r"what (?:is|are) (?:this|the) paper(?:'s)? main (?:idea|point|content)[?.!]*",
+            english,
+        )
+    )
+
+
+def representative_chunks(
+    chunks: list[dict[str, Any]], limit: int = 8
+) -> list[dict[str, Any]]:
+    ordered = sorted(
+        chunks,
+        key=lambda chunk: (int(chunk.get("page", 1)), int(chunk.get("ordinal", 0))),
+    )
+    target = max(1, min(int(limit), 30))
+    if len(ordered) <= target:
+        return ordered
+    if target == 1:
+        return [ordered[0]]
+    indices = {
+        round(position * (len(ordered) - 1) / (target - 1))
+        for position in range(target)
+    }
+    return [ordered[index] for index in sorted(indices)]
+
+
 SECTION_SPECS = [
     ("motivation", "研究动机", ("motivation", "problem", "challenge", "background")),
     ("method", "方法步骤", ("method", "architecture", "framework", "approach")),
