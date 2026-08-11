@@ -245,6 +245,13 @@ def _apply_provider_controls(
         else:
             payload["thinking"] = {"type": "disabled"}
             payload.pop("reasoning_effort", None)
+    elif (
+        hostname == "apifusion.aispeech.com.cn"
+        and model.startswith("deepseek-v4")
+        and task != "analysis"
+    ):
+        payload["thinking"] = {"type": "disabled"}
+        payload.pop("reasoning_effort", None)
 
 
 def _request_chat_completion_result_with_controls(

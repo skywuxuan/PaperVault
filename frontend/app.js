@@ -15,6 +15,7 @@ const state = {
   librarySort: "recent",
   libraryFacets: { total: 0, summary: {}, rating: {} },
   selectedPaperIds: new Set(),
+  summaryRetryIds: new Set(),
   batchRunning: false,
   currentPaper: null,
   readerMode: "quick",
@@ -293,20 +294,38 @@ function renderLibrary() {
     content.append(titleLine);
     const details = make("details", "paper-details");
     const detailsSummary = make("summary", "paper-details-toggle", "作者总结与简介");
+    const classification = make("span", "paper-tags paper-classification");
+    paper.tags.forEach((tag) => classification.append(tagChip(tag)));
+    if (paper.tags.length) detailsSummary.append(classification);
     details.append(
       detailsSummary,
       make("p", "paper-authors", paperAuthorDetails(paper)),
       make("p", "paper-snippet", paperSnippet(paper)),
     );
     content.append(details);
-    const classification = make("div", "paper-tags paper-classification");
-    paper.tags.forEach((tag) => classification.append(tagChip(tag)));
-    if (paper.tags.length) content.append(classification);
 
     const facts = make("div", "paper-facts");
     const statusLine = make("div", "paper-fact-line paper-status-line");
     statusLine.append(ratingControl(paper, "paper-row-rating"));
-    const summaryState = make("span", `summary-state ${paper.summary_status || "pending"}`, statusLabels[paper.summary_status] || "待生成");
+    const retryable = ["error", "translation_error"].includes(paper.summary_status);
+    const retrying = state.summaryRetryIds.has(paper.id);
+    const summaryState = make(
+      retryable ? "button" : "span",
+      `summary-state ${paper.summary_status || "pending"} ${retryable ? "retryable" : ""}`.trim(),
+      retrying ? "正在重试" : (statusLabels[paper.summary_status] || "待生成"),
+    );
+    if (retryable) {
+      summaryState.type = "button";
+      summaryState.disabled = retrying;
+      summaryState.title = paper.summary_status === "translation_error"
+        ? "点击仅重新生成中文翻译"
+        : "点击重新生成英文摘要和中文翻译";
+      summaryState.setAttribute("aria-label", `${paper.title}：${summaryState.title}`);
+      summaryState.addEventListener("click", (event) => {
+        event.stopPropagation();
+        retryFailedPaperSummary(paper).catch(handleError);
+      });
+    }
     statusLine.append(summaryState);
     const latestJob = latestPaperJob(paper);
     if (latestJob) statusLine.append(make("span", `analysis-state ${latestJob.status}`, jobStatusLabel(latestJob)));
@@ -2671,6 +2690,52 @@ async function regenerateSummary() {
     handleError(error);
   } finally {
     setBusy(false);
+  }
+}
+
+function cacheUpdatedPaper(paper) {
+  if (!paper?.id) return;
+  const index = state.papers.findIndex((item) => item.id === paper.id);
+  if (index >= 0) state.papers[index] = paper;
+  if (state.currentPaper?.id === paper.id) state.currentPaper = paper;
+}
+
+async function retryFailedPaperSummary(paper) {
+  if (!["error", "translation_error"].includes(paper?.summary_status)) return;
+  if (state.summaryRetryIds.has(paper.id)) return;
+  if (state.settings.provider !== "openai_compatible") {
+    showSettingsDialog();
+    toast("重新生成摘要需要先配置 OpenAI 兼容模型", "error");
+    return;
+  }
+  const translationOnly = paper.summary_status === "translation_error" && paper.summary_blocks?.length;
+  state.summaryRetryIds.add(paper.id);
+  cacheUpdatedPaper({
+    ...paper,
+    summary_status: translationOnly ? "translating" : "generating",
+    summary_translation_status: translationOnly ? "translating" : paper.summary_translation_status,
+    summary_error: "",
+    summary_translation_error: "",
+  });
+  renderLibrary();
+  toast(translationOnly ? "正在重新生成中文翻译" : "正在重新生成英文摘要，完成后将继续翻译");
+  try {
+    let result;
+    if (translationOnly) {
+      result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
+    } else {
+      result = await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
+      cacheUpdatedPaper(result.paper);
+      result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
+    }
+    cacheUpdatedPaper(result.paper);
+    toast(translationOnly ? "中文翻译已完成" : "双语详细总结已重新生成");
+  } catch (error) {
+    if (error.data?.paper) cacheUpdatedPaper(error.data.paper);
+    handleError(error);
+  } finally {
+    state.summaryRetryIds.delete(paper.id);
+    await loadLibrary().catch(handleError);
   }
 }
 

@@ -130,20 +130,20 @@ api_key: stored locally, masked by API
 
 For the official DeepSeek host and `deepseek-v4*` models, English deep analysis
 enables thinking with `high` effort (or user-selected `max`). The currently
-configured OpenAI-compatible gateway keeps its own provider controls instead.
-Translation and JSON repair disable thinking on the official host. The adapter
-reads only final `content` and never stores or displays `reasoning_content`. It
-does not silently change flash to pro.
+configured apifusion gateway keeps provider-owned controls for English analysis,
+but translation and JSON repair explicitly send `thinking: disabled`; this avoids
+long reasoning exhausting the output budget before final `content` is produced.
+The adapter reads only final `content` and never stores or displays
+`reasoning_content`. It does not silently change flash to pro.
 
 ## 5. Current Library State
 
 The active library currently exposes 23 papers and has 10 recoverable records in
-the recycle bin. A 24-file import on 2026-08-11 produced 14 fully completed new
-papers, four visible English-summary failures, three visible translation-only
-failures, and three duplicate upload records that were consolidated. Two older
-complete Step-Audio records were retained over newly failed duplicate attempts.
-No existing paper or summary was regenerated as part of the 2.1.1 reliability
-change.
+the recycle bin. A 24-file import on 2026-08-11 initially produced 14 fully
+completed new papers, four visible English-summary failures, three visible
+translation-only failures, and three duplicate upload records that were
+consolidated. Two older complete Step-Audio records were retained over newly
+failed duplicate attempts.
 
 Before the 2.1.0
 structured-summary migration and user-requested regeneration, the stopped SQLite
@@ -163,6 +163,17 @@ flow requested by the user. Every paper now uses prompt version
 block. Per-paper block counts are `39, 34, 47, 56, 35, 40, 36, 40, 34` (361 total).
 Aggregate validation found unique IDs and valid PDF page references for all blocks.
 Original PDFs and non-summary paper metadata were not rewritten by regeneration.
+
+Later on 2026-08-11, the remaining seven failed import records were repaired
+serially after the apifusion translation control fix. XFlow, WEST, and
+DeepSeek-R1 resumed through translation-only retry; FireRedChat, HybridFlow,
+Kimi-Audio, and GLCLAP completed English analysis followed by Chinese
+translation. Current aggregate verification covers all 23 visible papers: all
+have `summary_status = ready` and `summary_translation_status = ready`, with 974
+total blocks, no missing English or Chinese block text, no duplicate block IDs,
+and no out-of-range PDF page references. The retry work did not rewrite original
+PDFs or non-summary paper metadata. A SQLite online backup was created before
+these retries in `data/backups/`.
 
 The active database migrates additively to schema version 4 with indexed normalized
 title keys and safe summary error codes, in addition to analysis jobs/runs, page
@@ -262,12 +273,17 @@ Automated tests must continue to use temporary data directories.
 - Hugging Face-inspired compact paper list and faceted sidebar; common desktop rows are about 56 px high and all nine current papers fit in a 1440x900 viewport.
 - Paper titles wrap to their complete text instead of being line-clamped. Import passes the original filename into PDF parsing and only joins adjacent first-page title lines while their normalized text remains a prefix of that filename, preventing author lines from being appended.
 - Ratings, summary state, and latest analysis state share the first right-aligned fact line; page count, file size, and import date share the second line.
-- Authors and introductions are collapsed by default under the 11 px `作者总结与简介` disclosure; expanded author and introduction text is also 11 px.
+- Authors and introductions are collapsed by default under the 12 px `作者总结与简介` disclosure; expanded author and introduction text remains 11 px.
 - Pure publication years and generic PDF metadata are not displayed as authors; future imports reject those values and conservatively infer a likely first-page author line.
 - Search title, author, DOI, summary, and tags.
 - Sort by recent import, rating, publication year, or title.
 - Filter by custom tag, summary status, and rating.
-- Custom tags are displayed above summary status.
+- Custom tags are displayed on the same wrapping row as the `作者总结与简介`
+  disclosure, while summary status remains in the right-aligned facts column.
+- Failed English or translation status is an accessible retry button. English
+  failures rerun analysis and then translation; translation-only failures preserve
+  English blocks and call only the translation endpoint. Per-paper in-flight state
+  prevents duplicate submissions.
 - Summary status and rating do not show redundant `All` entries; clicking an active facet again clears it. Active nonzero custom tags behave the same way. `All papers` remains the unified reset action for keyword, custom-tag, summary-status, and rating filters, and is active only when none of those filters is applied.
 - Zero-count tags display `0 papers` and cannot open an empty result accidentally.
 - Multi-select and select all current results.
@@ -432,13 +448,16 @@ node --check frontend\app.js
 Last verification result:
 
 ```text
-62 tests passed
+64 tests passed
 JavaScript syntax check passed
 Temporary-data API coverage confirms filename/title duplicate short-circuiting,
 schema-v4 migration, complete-summary quality ordering, transient retry behavior,
 structural report recovery, and independent translation chunks.
-The upload dialog was checked in the in-app browser against a temporary empty data
-directory; layout was intact and there were no browser console warnings or errors.
+The live 23-paper library was checked in the in-app browser: all rows showed an
+existing summary, no retryable failure controls remained, tags shared the
+disclosure row without overflow, and there were no browser console warnings or
+errors. The real library API also verified 23/23 bilingual-ready papers and 974
+complete blocks with unique IDs and valid page references.
 Windows PyInstaller `onedir` build passed. The packaged executable reports
 `FileVersion` and `ProductVersion` 2.1.1, and the bundled frontend contains the
 new duplicate-skip response handling.

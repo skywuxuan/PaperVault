@@ -78,6 +78,36 @@ class SummaryFormatTestCase(unittest.TestCase):
         )
         self.assertNotIn("thinking", payload)
 
+    def test_apifusion_disables_thinking_for_translation(self) -> None:
+        payload = {
+            "model": "deepseek-v4-flash",
+            "temperature": 0.1,
+            "reasoning_effort": "high",
+        }
+        _apply_provider_controls(
+            payload,
+            {
+                "base_url": "https://apifusion.aispeech.com.cn/v1",
+                "model": "deepseek-v4-flash",
+            },
+            task="translation",
+        )
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", payload)
+        self.assertEqual(payload["temperature"], 0.1)
+
+    def test_apifusion_keeps_analysis_controls_provider_owned(self) -> None:
+        payload = {"model": "deepseek-v4-flash"}
+        _apply_provider_controls(
+            payload,
+            {
+                "base_url": "https://apifusion.aispeech.com.cn/v1",
+                "model": "deepseek-v4-flash",
+            },
+            task="analysis",
+        )
+        self.assertNotIn("thinking", payload)
+
     def test_academic_glossary_translates_without_network(self) -> None:
         translated = translate_english_offline("reinforcement")
         self.assertEqual(translated["translation_zh"], "强化；增强；加固")
