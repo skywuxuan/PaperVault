@@ -243,7 +243,7 @@ Automated tests must continue to use temporary data directories.
 - Sort by recent import, rating, publication year, or title.
 - Filter by custom tag, summary status, and rating.
 - Custom tags are displayed above summary status.
-- Active nonzero tags can be clicked again to clear. `All papers` is the unified reset action: it clears keyword, custom-tag, summary-status, and rating filters, and is active only when none of those filters is applied.
+- Summary status and rating do not show redundant `All` entries; clicking an active facet again clears it. Active nonzero custom tags behave the same way. `All papers` remains the unified reset action for keyword, custom-tag, summary-status, and rating filters, and is active only when none of those filters is applied.
 - Zero-count tags display `0 papers` and cannot open an empty result accidentally.
 - Multi-select and select all current results.
 - Batch quick-read analysis is submitted to the persistent backend queue in one request rather than browser-side serial state.

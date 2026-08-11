@@ -359,7 +359,6 @@ async function setPaperReadState(paperId, readState, render = true) {
 function renderLibraryFacets() {
   const summary = state.libraryFacets.summary || {};
   const rating = state.libraryFacets.rating || {};
-  $("#summaryAllCount").textContent = state.libraryFacets.total || 0;
   $("#summaryReadyCount").textContent = summary.ready || 0;
   $("#summaryErrorCount").textContent = summary.error || 0;
   $("#summaryPendingCount").textContent = summary.pending || 0;
@@ -367,10 +366,14 @@ function renderLibraryFacets() {
     $(`#rating${value}Count`).textContent = rating[String(value)] || 0;
   }
   $$('[data-summary-filter]').forEach((button) => {
-    button.classList.toggle("active", button.dataset.summaryFilter === state.summaryFilter);
+    const active = button.dataset.summaryFilter === state.summaryFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   });
   $$('[data-rating-filter]').forEach((button) => {
-    button.classList.toggle("active", button.dataset.ratingFilter === state.ratingFilter);
+    const active = button.dataset.ratingFilter === state.ratingFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
   });
   renderAllPapersFilter();
 }
@@ -2928,14 +2931,18 @@ function bindEvents() {
   $("#summaryFilters").addEventListener("click", (event) => {
     const button = event.target.closest("[data-summary-filter]");
     if (!button) return;
-    state.summaryFilter = button.dataset.summaryFilter;
+    state.summaryFilter = state.summaryFilter === button.dataset.summaryFilter
+      ? "all"
+      : button.dataset.summaryFilter;
     clearPaperSelection(false);
     loadLibrary().catch(handleError);
   });
   $("#ratingFilters").addEventListener("click", (event) => {
     const button = event.target.closest("[data-rating-filter]");
     if (!button) return;
-    state.ratingFilter = button.dataset.ratingFilter;
+    state.ratingFilter = state.ratingFilter === button.dataset.ratingFilter
+      ? "all"
+      : button.dataset.ratingFilter;
     clearPaperSelection(false);
     loadLibrary().catch(handleError);
   });
