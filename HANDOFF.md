@@ -216,6 +216,7 @@ Automated tests must continue to use temporary data directories.
 
 - Local PDF page renderer instead of an embedded browser PDF plugin.
 - Page navigation, zoom, fit width, and trackpad `Ctrl`/pinch-style zoom scoped to the PDF panel.
+- Preview images are rendered on demand at a scale derived from displayed page width and device pixel ratio. Zooming or widening the panel upgrades loaded pages to a higher-resolution PNG without replacing the original PDF; quarter-step scale caches are capped at 5x.
 - Text selection and double-click word translation.
 - Persistent PDF highlights with four colors and connected same-line highlight bands.
 - Selecting an already highlighted range exposes a direct cancel-highlight action; the annotation popover uses the same action wording.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -399,7 +400,14 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             return
         match = PAPER_PAGE_IMAGE_RE.match(path)
         if match:
-            self.serve_preview_page(match.group(1), int(match.group(2)))
+            query = parse_qs(parsed.query)
+            raw_scale = query.get("scale", [""])[0].strip()
+            try:
+                scale = normalize_preview_scale(raw_scale) if raw_scale else None
+            except ValueError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self.serve_preview_page(match.group(1), int(match.group(2)), scale)
             return
         match = PAPER_PAGE_TEXT_RE.match(path)
         if match:
@@ -1160,7 +1168,9 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def serve_preview_page(self, paper_id: str, page_number: int) -> None:
+    def serve_preview_page(
+        self, paper_id: str, page_number: int, scale: float | None = None
+    ) -> None:
         paper = self.server.db.get_paper(paper_id)
         if paper is None:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -1169,10 +1179,12 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.NOT_FOUND, "PDF page not found")
             return
         pdf_path = self.server.upload_dir / paper["stored_filename"]
-        output_path = self.server.asset_dir / paper_id / f"preview-{page_number}.png"
+        render_scale = scale if scale is not None else 1.7
+        scale_suffix = "" if scale is None else f"-{round(render_scale * 100):03d}"
+        output_path = self.server.asset_dir / paper_id / f"preview-{page_number}{scale_suffix}.png"
         try:
             if not output_path.is_file():
-                render_preview_page(pdf_path, output_path, page_number)
+                render_preview_page(pdf_path, output_path, page_number, render_scale)
             content = output_path.read_bytes()
         except (OSError, RuntimeError, ValueError) as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, f"PDF page rendering failed: {exc}")
@@ -1181,6 +1193,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "image/png")
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "private, max-age=86400")
+        self.send_header("X-PaperVault-Render-Scale", f"{render_scale:g}")
         self.end_headers()
         self.wfile.write(content)
 
@@ -1558,6 +1571,16 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
     def log_message(self, format_string: str, *args: Any) -> None:
         if sys.stdout is not None:
             sys.stdout.write(f"[{self.log_date_time_string()}] {format_string % args}\n")
+
+
+def normalize_preview_scale(value: Any) -> float:
+    try:
+        scale = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("PDF preview scale must be a number") from exc
+    if not math.isfinite(scale):
+        raise ValueError("PDF preview scale must be finite")
+    return min(5.0, max(1.0, math.ceil(scale * 4) / 4))
 
 
 def parse_year(value: Any) -> int | None:

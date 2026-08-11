@@ -10,6 +10,7 @@ import uuid
 from unittest.mock import patch
 from pathlib import Path
 
+from PIL import Image
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
@@ -177,7 +178,36 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(preview_response.status, 200)
         self.assertEqual(preview_response.getheader("Content-Type"), "image/png")
         self.assertTrue(preview_bytes.startswith(b"\x89PNG"))
+        self.assertEqual(preview_response.getheader("X-PaperVault-Render-Scale"), "1.7")
         preview_connection.close()
+
+        with Image.open(io.BytesIO(preview_bytes)) as preview_image:
+            default_preview_size = preview_image.size
+        high_resolution_connection = http.client.HTTPConnection(
+            "127.0.0.1", self.port, timeout=10
+        )
+        high_resolution_connection.request(
+            "GET", f"/api/papers/{paper_id}/pages/1.png?scale=3.1"
+        )
+        high_resolution_response = high_resolution_connection.getresponse()
+        high_resolution_bytes = high_resolution_response.read()
+        self.assertEqual(high_resolution_response.status, 200)
+        self.assertEqual(
+            high_resolution_response.getheader("X-PaperVault-Render-Scale"), "3.25"
+        )
+        with Image.open(io.BytesIO(high_resolution_bytes)) as high_resolution_image:
+            self.assertGreater(high_resolution_image.width, default_preview_size[0])
+            self.assertGreater(high_resolution_image.height, default_preview_size[1])
+        self.assertTrue(
+            (self.server.asset_dir / paper_id / "preview-1-325.png").is_file()
+        )
+        high_resolution_connection.close()
+
+        status, invalid_scale, _ = self.request(
+            "GET", f"/api/papers/{paper_id}/pages/1.png?scale=not-a-number"
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("scale", invalid_scale["error"].lower())
 
         status, page_text, _ = self.request("GET", f"/api/papers/{paper_id}/pages/1/text")
         self.assertEqual(status, 200)

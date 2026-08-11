@@ -40,6 +40,7 @@ const state = {
   pdfZoom: 1,
   pdfObserver: null,
   pdfScrollFrame: null,
+  pdfRenderTimer: null,
   pendingPdfPage: null,
   pdfAnnotations: [],
   pdfSelection: null,
@@ -985,7 +986,9 @@ async function handleRoute() {
 
 function clearPdfPreview() {
   if (state.pdfScrollFrame) window.cancelAnimationFrame(state.pdfScrollFrame);
+  window.clearTimeout(state.pdfRenderTimer);
   state.pdfScrollFrame = null;
+  state.pdfRenderTimer = null;
   state.pdfObserver?.disconnect();
   state.pdfObserver = null;
   state.pdfPaperId = null;
@@ -1033,6 +1036,11 @@ async function loadPdfPage(shell) {
   const page = Number(shell.dataset.page);
   const paperId = state.pdfPaperId;
   try {
+    const textData = await api(`/api/papers/${paperId}/pages/${page}/text`);
+    if (paperId !== state.pdfPaperId) return;
+    shell.style.aspectRatio = `${textData.width} / ${textData.height}`;
+    shell.dataset.pdfWidth = String(textData.width);
+    const renderScale = pdfRenderScale(shell);
     const image = document.createElement("img");
     image.alt = `PDF 第 ${page} 页`;
     image.decoding = "async";
@@ -1040,13 +1048,10 @@ async function loadPdfPage(shell) {
       image.addEventListener("load", resolve, { once: true });
       image.addEventListener("error", reject, { once: true });
     });
-    image.src = `/api/papers/${paperId}/pages/${page}.png`;
-    const [textData] = await Promise.all([
-      api(`/api/papers/${paperId}/pages/${page}/text`),
-      imageReady,
-    ]);
+    image.src = pdfPageImageUrl(paperId, page, renderScale);
+    await imageReady;
     if (paperId !== state.pdfPaperId) return;
-    shell.style.aspectRatio = `${textData.width} / ${textData.height}`;
+    shell.dataset.renderScale = String(renderScale);
     const layer = make("div", "pdf-text-layer");
     for (const [wordIndex, word] of (textData.words || []).entries()) {
       const span = make("span", "pdf-word", word.text);
@@ -1072,6 +1077,62 @@ async function loadPdfPage(shell) {
   } catch (error) {
     shell.textContent = "页面加载失败";
     shell.dataset.loading = "false";
+  }
+}
+
+function pdfRenderScale(shell) {
+  const pdfWidth = Math.max(1, Number(shell?.dataset.pdfWidth) || 612);
+  const displayWidth = Math.max(1, shell?.getBoundingClientRect().width || shell?.clientWidth || 1);
+  const pixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  const required = displayWidth * pixelRatio / pdfWidth;
+  return Math.max(1.75, Math.min(5, Math.ceil(required * 4) / 4));
+}
+
+function pdfPageImageUrl(paperId, page, scale) {
+  return `/api/papers/${paperId}/pages/${page}.png?scale=${scale.toFixed(2)}`;
+}
+
+function schedulePdfResolutionRefresh() {
+  window.clearTimeout(state.pdfRenderTimer);
+  if (!state.pdfPaperId) return;
+  state.pdfRenderTimer = window.setTimeout(() => {
+    state.pdfRenderTimer = null;
+    $$('.pdf-page[data-loaded="true"]', $("#pdfViewer")).forEach((shell) => {
+      upgradePdfPageImage(shell).catch(() => {});
+    });
+  }, 180);
+}
+
+async function upgradePdfPageImage(shell) {
+  const image = $("img", shell);
+  const paperId = state.pdfPaperId;
+  const page = Number(shell.dataset.page);
+  if (!image || !paperId || !page) return;
+  const scale = pdfRenderScale(shell);
+  const currentScale = Number(shell.dataset.renderScale) || 0;
+  const requestedScale = Number(shell.dataset.requestedScale) || 0;
+  if (scale <= currentScale || scale <= requestedScale) return;
+  shell.dataset.requestedScale = String(scale);
+  const url = pdfPageImageUrl(paperId, page, scale);
+  const replacement = new Image();
+  replacement.decoding = "async";
+  const ready = new Promise((resolve, reject) => {
+    replacement.addEventListener("load", resolve, { once: true });
+    replacement.addEventListener("error", reject, { once: true });
+  });
+  replacement.src = url;
+  try {
+    await ready;
+    if (
+      paperId === state.pdfPaperId
+      && Number(shell.dataset.requestedScale) === scale
+      && shell.isConnected
+    ) {
+      image.src = url;
+      shell.dataset.renderScale = String(scale);
+    }
+  } finally {
+    if (Number(shell.dataset.requestedScale) === scale) delete shell.dataset.requestedScale;
   }
 }
 
@@ -1456,6 +1517,7 @@ function setPdfZoom(value, focusPoint = null) {
   window.requestAnimationFrame(() => {
     viewer.scrollLeft = contentX * ratio - localX;
     viewer.scrollTop = contentY * ratio - localY;
+    schedulePdfResolutionRefresh();
   });
 }
 
@@ -2808,6 +2870,7 @@ function updatePanelLayout() {
       ? "100% 100%"
       : "minmax(360px, .95fr) minmax(440px, 1.35fr)";
     $("#pdfPanel")?.classList.remove("collapsed");
+    schedulePdfResolutionRefresh();
     return;
   }
   const labels = { pdf: "原始论文", english: "英文摘要", chinese: "中文摘要" };
@@ -2833,6 +2896,7 @@ function updatePanelLayout() {
       button.setAttribute("aria-label", button.title);
     }
   }
+  schedulePdfResolutionRefresh();
 }
 
 function bindEvents() {
