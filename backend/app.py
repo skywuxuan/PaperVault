@@ -22,14 +22,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .analysis import (
-    FIGURE_ANALYSIS_PROMPT_VERSION,
     QA_PROMPT_VERSION,
-    QUICK_READ_PROMPT_VERSION,
     analysis_input_hash,
     answer_with_citations,
     build_text_chunks,
-    generate_figure_analysis,
-    generate_quick_read,
     is_paper_overview_question,
     provider_available,
     representative_chunks,
@@ -67,12 +63,6 @@ PAPER_PAGE_IMAGE_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)\.png
 PAPER_PAGE_TEXT_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/pages/([0-9]+)/text$")
 PAPER_SUMMARY_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/generate-summary$")
 PAPER_SUMMARY_TRANSLATION_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/translate-summary$")
-PAPER_ANALYSES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/analyses$")
-PAPER_ANALYSIS_CREATE_RE = re.compile(
-    r"^/api/papers/([0-9a-f-]+)/analyses/(quick-read|figure-analysis)$"
-)
-ANALYSIS_JOB_RE = re.compile(r"^/api/analysis-jobs/([0-9a-f-]+)$")
-ANALYSIS_JOB_RETRY_RE = re.compile(r"^/api/analysis-jobs/([0-9a-f-]+)/retry$")
 TRASH_RESTORE_RE = re.compile(r"^/api/trash/([0-9a-f-]+)/restore$")
 TAG_ROUTE_RE = re.compile(r"^/api/tags/([0-9a-f-]+)$")
 VOCABULARY_ROUTE_RE = re.compile(r"^/api/vocabulary/([0-9a-f-]+)$")
@@ -102,7 +92,6 @@ class PaperVaultServer(ThreadingHTTPServer):
         super().__init__(address, PaperVaultHandler)
 
     def serve_forever(self, poll_interval: float = 0.5) -> None:
-        self.start_job_worker()
         try:
             super().serve_forever(poll_interval=poll_interval)
         finally:
@@ -155,17 +144,9 @@ class PaperVaultServer(ThreadingHTTPServer):
             paper = self.db.get_paper(paper_id, include_text=True)
             if paper is None:
                 raise SummaryError("Paper is unavailable or in the recycle bin")
-            if job["job_type"] == "figure_analysis":
-                self.ensure_visual_assets(paper_id, refresh_legacy=True)
-                paper = self.db.get_paper(paper_id, include_text=True) or paper
             chunks = self.ensure_text_index(paper_id)
             input_hash = analysis_input_hash(paper, job["job_type"], self.asset_dir)
-            if job["job_type"] == "quick_read":
-                content, provider, token_count = generate_quick_read(paper, chunks, settings)
-            elif job["job_type"] == "figure_analysis":
-                content, provider, token_count = generate_figure_analysis(paper, chunks, settings)
-            else:
-                raise SummaryError("Unsupported analysis job type")
+            raise SummaryError("Analysis jobs are disabled")
             duration_ms = max(0, int((time.perf_counter() - started) * 1000))
             run_id = str(uuid.uuid4())
             self.db.create_analysis_run(
@@ -226,35 +207,7 @@ class PaperVaultServer(ThreadingHTTPServer):
         paper = self.db.get_paper(paper_id, include_text=True)
         if paper is None:
             return None, False
-        active = self.db.list_analysis_jobs(
-            paper_id, statuses=("queued", "running"), limit=100
-        )
-        existing = next((job for job in active if job["job_type"] == job_type), None)
-        if existing is not None:
-            return existing, False
-        if job_type == "figure_analysis":
-            self.ensure_visual_assets(paper_id, refresh_legacy=True)
-            paper = self.db.get_paper(paper_id, include_text=True) or paper
-        settings = self.db.get_settings(include_secret=True)
-        prompt_version = (
-            QUICK_READ_PROMPT_VERSION
-            if job_type == "quick_read"
-            else FIGURE_ANALYSIS_PROMPT_VERSION
-        )
-        job = self.db.create_analysis_job(
-            {
-                "id": str(uuid.uuid4()),
-                "paper_id": paper_id,
-                "job_type": job_type,
-                "provider": settings.get("provider", "local"),
-                "model": settings.get("model", "") if provider_available(settings) else "",
-                "input_hash": analysis_input_hash(paper, job_type, self.asset_dir),
-                "prompt_version": prompt_version,
-                "payload": {},
-            }
-        )
-        self.notify_job_worker()
-        return job, True
+        return None, False
 
     def ensure_visual_assets(
         self, paper_id: str, refresh_legacy: bool = False
@@ -348,25 +301,6 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 {"papers": papers, "total": len(papers), "facets": self.server.db.library_facets()}
             )
             return
-        if path == "/api/analysis-jobs":
-            query = parse_qs(parsed.query)
-            paper_id = query.get("paper_id", [""])[0] or None
-            statuses = tuple(
-                status
-                for status in query.get("status", [""])[0].split(",")
-                if status in {"queued", "running", "succeeded", "failed"}
-            )
-            jobs = self.server.db.list_analysis_jobs(paper_id, statuses=statuses)
-            self.send_json({"jobs": jobs, "total": len(jobs)})
-            return
-        match = ANALYSIS_JOB_RE.match(path)
-        if match:
-            job = self.server.db.get_analysis_job(match.group(1))
-            if job is None:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "Analysis job not found")
-                return
-            self.send_json({"job": job})
-            return
         if path == "/api/trash":
             papers = self.server.db.list_trash()
             self.send_json({"papers": papers, "total": len(papers)})
@@ -420,20 +354,6 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             annotations = self.server.db.list_annotations(match.group(1))
             self.send_json({"annotations": annotations})
             return
-        match = PAPER_ANALYSES_RE.match(path)
-        if match:
-            paper_id = match.group(1)
-            if self.server.db.get_paper(paper_id) is None:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
-                return
-            runs = self.server.db.list_analysis_runs(paper_id)
-            jobs = self.server.db.list_analysis_jobs(paper_id, limit=100)
-            latest: dict[str, dict[str, Any]] = {}
-            for run in runs:
-                if run["status"] == "succeeded":
-                    latest.setdefault(str(run["analysis_type"]), run)
-            self.send_json({"runs": runs, "jobs": jobs, "latest": latest})
-            return
         match = PAPER_ROUTE_RE.match(path)
         if match:
             paper = self.server.ensure_visual_assets(match.group(1))
@@ -464,21 +384,6 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/papers/batch":
             self.batch_papers()
-            return
-        if path == "/api/analysis-jobs/batch":
-            self.batch_analysis_jobs()
-            return
-        if path == "/api/qa":
-            self.answer_question()
-            return
-        match = PAPER_ANALYSIS_CREATE_RE.match(path)
-        if match:
-            job_type = "quick_read" if match.group(2) == "quick-read" else "figure_analysis"
-            self.create_analysis_job(match.group(1), job_type)
-            return
-        match = ANALYSIS_JOB_RETRY_RE.match(path)
-        if match:
-            self.retry_analysis_job(match.group(1))
             return
         match = TRASH_RESTORE_RE.match(path)
         if match:
@@ -586,7 +491,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             if not paper_ids or len(paper_ids) > 500:
                 raise ValueError("Select between 1 and 500 papers")
             job_type = str(payload.get("job_type", ""))
-            if job_type not in {"quick_read", "figure_analysis"}:
+            if job_type not in {"figure_analysis"}:
                 raise ValueError("Invalid analysis job type")
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))

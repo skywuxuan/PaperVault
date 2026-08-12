@@ -2,7 +2,6 @@
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const CURRENT_FIGURE_PROMPT_VERSION = "figure-analysis-v2";
 
 const state = {
   papers: [],
@@ -18,14 +17,11 @@ const state = {
   summaryRetryIds: new Set(),
   batchRunning: false,
   currentPaper: null,
-  readerMode: "quick",
+  readerMode: "deep",
   analysisRuns: [],
   analysisJobs: [],
-  analysisSelections: { quick_read: null, figure_analysis: null },
+  analysisSelections: {},
   analysisPollTimer: null,
-  qaResult: null,
-  qaError: "",
-  qaBusy: false,
   activePair: null,
   pairClickTimer: null,
   vocabulary: [],
@@ -182,7 +178,7 @@ function latestPaperJob(paper) {
 
 function jobStatusLabel(job) {
   if (!job) return "";
-  const type = job.job_type === "figure_analysis" ? "图表" : "速读";
+  const type = "分析";
   const status = {
     queued: "排队中",
     running: "分析中",
@@ -223,7 +219,6 @@ async function loadSettings() {
   const data = await api("/api/settings");
   state.settings = data.settings;
   updateProviderHint();
-  renderQaPanel();
 }
 
 async function loadVocabulary() {
@@ -518,37 +513,6 @@ async function runBatchMutation(action, payload, successMessage) {
     await Promise.all([loadLibrary(), loadTags()]);
     finishBatchProgress("批量操作完成", `已处理 ${result.processed_count} 篇论文`);
     toast(successMessage.replace("{count}", String(result.processed_count)));
-  } catch (error) {
-    $("#batchProgress").hidden = true;
-    handleError(error);
-  } finally {
-    state.batchRunning = false;
-    updateBatchToolbar();
-  }
-}
-
-async function queueSelectedQuickReads() {
-  const papers = selectedPapers();
-  if (!papers.length || state.batchRunning) return;
-  const accepted = await confirmAction(
-    "批量速读分析",
-    `将为所选 ${papers.length} 篇论文创建后台任务；关闭页面或重启服务后任务记录仍会保留。`,
-  );
-  if (!accepted) return;
-  state.batchRunning = true;
-  updateBatchToolbar();
-  closeBatchMenus();
-  setBatchProgress("正在创建速读任务", 0, papers.length, `${papers.length} 篇论文`);
-  try {
-    const result = await api("/api/analysis-jobs/batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paper_ids: papers.map((paper) => paper.id), job_type: "quick_read" }),
-    });
-    clearPaperSelection(false);
-    await loadLibrary();
-    finishBatchProgress("速读任务已提交", `后台任务 ${result.queued_count} 项`);
-    toast(`已提交 ${result.queued_count} 项速读任务`);
   } catch (error) {
     $("#batchProgress").hidden = true;
     handleError(error);
@@ -985,9 +949,7 @@ async function handleRoute() {
     state.currentPaper = data.paper;
     state.analysisRuns = [];
     state.analysisJobs = [];
-    state.analysisSelections = { quick_read: null, figure_analysis: null };
-    state.qaResult = null;
-    state.qaError = "";
+    state.analysisSelections = {};
     renderReader();
     $("#libraryView").hidden = true;
     $("#readerView").hidden = false;
@@ -1609,8 +1571,6 @@ function renderReader() {
     paper.id,
     paper.summary_blocks || [],
   );
-  renderAnalysisPanels();
-  renderQaPanel();
   renderNotesPanel();
   setReaderMode(state.readerMode);
 }
@@ -1627,7 +1587,7 @@ function renderReaderIdentity(paper) {
 }
 
 function setReaderMode(mode) {
-  if (!["quick", "deep", "ask", "notes"].includes(mode)) return;
+  if (!["deep", "notes"].includes(mode)) return;
   state.readerMode = mode;
   $$('[data-reader-mode]').forEach((button) => {
     const active = button.dataset.readerMode === mode;
@@ -1642,16 +1602,12 @@ function setReaderMode(mode) {
   });
   $("#regenerateButton").hidden = !deep;
   updatePanelLayout();
-  if (mode === "quick") renderAnalysisPanels();
-  if (mode === "ask") renderQaPanel();
   if (mode === "notes") renderNotesPanel();
 }
 
 function focusReaderModePanel(mode) {
   if (window.innerWidth > 760) return;
-  const target = mode === "deep"
-    ? $("#englishPanel")
-    : $(`[data-analysis-panel="${mode}"]`);
+  const target = mode === "deep" ? $("#englishPanel") : $(`[data-analysis-panel="${mode}"]`);
   const grid = $("#readerGrid");
   if (!target || !grid) return;
   grid.scrollTo({ left: target.offsetLeft, behavior: "smooth" });
@@ -1673,45 +1629,12 @@ function selectedAnalysisRun(type) {
 }
 
 async function loadPaperAnalyses() {
-  const paperId = state.currentPaper?.id;
-  if (!paperId) return;
-  const hadActive = state.analysisJobs.some((job) => ["queued", "running"].includes(job.status));
-  const data = await api(`/api/papers/${paperId}/analyses`);
-  if (state.currentPaper?.id !== paperId) return;
-  state.analysisRuns = data.runs || [];
-  state.analysisJobs = data.jobs || [];
-  renderAnalysisPanels();
-  const active = state.analysisJobs.filter((job) => ["queued", "running"].includes(job.status));
-  const latestJobs = [latestAnalysisJob("quick_read"), latestAnalysisJob("figure_analysis")].filter(Boolean);
-  const failed = latestJobs.filter((job) => job.status === "failed");
-  const summary = $("#readerTaskSummary");
-  if (active.length) summary.textContent = `${active.length} 项分析任务进行中`;
-  else if (failed.length) summary.textContent = `${failed.length} 项任务失败，可重试`;
-  else if (state.analysisRuns.length) summary.textContent = `${state.analysisRuns.filter((run) => run.status === "succeeded").length} 个分析版本`;
-  else summary.textContent = "分析任务就绪";
+  state.analysisRuns = [];
+  state.analysisJobs = [];
   stopAnalysisPolling();
-  if (active.length) {
-    state.analysisPollTimer = window.setTimeout(() => loadPaperAnalyses().catch(handleError), 700);
-  } else if (hadActive) {
-    loadLibrary().catch(handleError);
-  }
 }
 
 function renderAnalysisPanels() {
-  if (!$("#quickPanel")) return;
-  renderAnalysisVersionSelect("quick_read", $("#quickRunSelect"));
-  renderAnalysisVersionSelect("figure_analysis", $("#figureRunSelect"));
-  renderAnalysisJob("quick_read", $("#quickJobStatus"), $("#quickReadButton"));
-  renderAnalysisJob("figure_analysis", $("#figureJobStatus"), $("#figureAnalysisButton"));
-  renderQuickReadContent(selectedAnalysisRun("quick_read"));
-  renderFigureAnalysisContent(selectedAnalysisRun("figure_analysis"));
-  const active = state.analysisJobs.some((job) => ["queued", "running"].includes(job.status));
-  const failed = [latestAnalysisJob("quick_read"), latestAnalysisJob("figure_analysis")]
-    .filter(Boolean)
-    .some((job) => job.status === "failed");
-  const status = $("#quickPanelStatus");
-  status.className = `status-pill ${failed ? "error" : active ? "draft" : ""}`;
-  status.textContent = active ? "任务进行中" : failed ? "有任务失败" : state.analysisRuns.length ? "已有版本" : "尚未分析";
 }
 
 function renderAnalysisVersionSelect(type, select) {
@@ -1735,9 +1658,7 @@ function renderAnalysisJob(type, container, actionButton) {
   container.replaceChildren();
   const active = job && ["queued", "running"].includes(job.status);
   actionButton.disabled = Boolean(active);
-  actionButton.lastChild.textContent = type === "quick_read"
-    ? (selectedAnalysisRun(type) ? " 重新生成" : " 生成速读")
-    : (selectedAnalysisRun(type) ? " 重新分析" : " 分析图表");
+  actionButton.lastChild.textContent = selectedAnalysisRun(type) ? " 重新分析" : " 分析图表";
   if (!job) {
     container.hidden = true;
     return;
@@ -1764,12 +1685,7 @@ function renderAnalysisJob(type, container, actionButton) {
 }
 
 async function queueAnalysis(type) {
-  const paper = state.currentPaper;
-  if (!paper) return;
-  await api(`/api/papers/${paper.id}/analyses/${type === "quick_read" ? "quick-read" : "figure-analysis"}`, { method: "POST" });
-  state.analysisSelections[type] = null;
-  state.readerMode = "quick";
-  await loadPaperAnalyses();
+  return;
 }
 
 async function retryAnalysisJob(jobId) {
@@ -1787,31 +1703,6 @@ function pageJumpButton(page, label = `第 ${page} 页`) {
   button.title = `跳到 PDF 第 ${page} 页`;
   button.addEventListener("click", () => goToPdfPage(page));
   return button;
-}
-
-function renderQuickReadContent(run) {
-  const container = $("#quickReadContent");
-  container.replaceChildren();
-  const content = run?.content;
-  if (!content?.headline) {
-    container.append(make("p", "analysis-empty", "尚未生成速读分析。"));
-    return;
-  }
-  const headline = make("div", "quick-headline");
-  headline.append(make("span", "analysis-kicker", "一句话结论"), make("p", "", content.headline.text), pageJumpButton(content.headline.page));
-  container.append(headline);
-  for (const section of content.sections || []) {
-    const block = make("section", "quick-section");
-    block.append(make("h4", "", section.title));
-    const list = make("ul", "quick-fact-list");
-    for (const item of section.items || []) {
-      const row = make("li");
-      row.append(make("span", "", item.text), pageJumpButton(item.page, `p. ${item.page}`));
-      list.append(row);
-    }
-    block.append(list);
-    container.append(block);
-  }
 }
 
 function renderFigureAnalysisContent(run) {
@@ -1862,76 +1753,6 @@ function renderFigureAnalysisContent(run) {
     item.append(body);
     container.append(item);
   }
-}
-
-function renderQaPanel() {
-  if (!$("#qaAvailability")) return;
-  const available = state.settings.provider === "openai_compatible" && state.settings.base_url && state.settings.model;
-  const availability = $("#qaAvailability");
-  availability.className = `status-pill ${available ? "" : "error"}`;
-  availability.textContent = available ? `模型 · ${state.settings.model}` : "需要模型配置";
-  $("#qaSubmitButton").disabled = state.qaBusy;
-  const answer = $("#qaAnswer");
-  const sources = $("#qaSourceList");
-  answer.replaceChildren();
-  sources.replaceChildren();
-  if (state.qaBusy) {
-    answer.append(make("p", "analysis-empty", "正在检索论文原文并生成带引用回答..."));
-  } else if (state.qaError) {
-    answer.append(make("p", "qa-error", state.qaError));
-  } else if (state.qaResult) {
-    answer.append(make("p", "qa-answer-text", state.qaResult.answer));
-  } else {
-    answer.append(make("p", "analysis-empty", available ? "回答只会使用本地检索到的论文原文。" : "请先在模型设置中配置 OpenAI-compatible 服务。"));
-  }
-  const resultSources = state.qaResult?.sources || [];
-  $("#qaSourceCount").textContent = String(resultSources.length);
-  if (!resultSources.length) {
-    sources.append(make("p", "analysis-empty", "提交问题后显示引用页。"));
-    return;
-  }
-  for (const source of resultSources) {
-    const button = make("button", "qa-source-item");
-    button.type = "button";
-    button.append(
-      make("span", "qa-source-id", `${source.id} · p. ${source.page}`),
-      make("strong", "", source.paper_title),
-      make("span", "qa-source-excerpt", source.excerpt),
-    );
-    button.addEventListener("click", () => openQaSource(source));
-    sources.append(button);
-  }
-}
-
-async function handleQaSubmit(event) {
-  event.preventDefault();
-  const question = $("#qaQuestion").value.trim();
-  if (!question || !state.currentPaper || state.qaBusy) return;
-  state.qaBusy = true;
-  state.qaError = "";
-  state.qaResult = null;
-  renderQaPanel();
-  try {
-    state.qaResult = await api("/api/qa", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, scope: $("#qaScope").value, paper_id: state.currentPaper.id }),
-    });
-  } catch (error) {
-    state.qaError = error.message;
-  } finally {
-    state.qaBusy = false;
-    renderQaPanel();
-  }
-}
-
-function openQaSource(source) {
-  if (source.paper_id === state.currentPaper?.id) {
-    goToPdfPage(source.page);
-    return;
-  }
-  state.pendingPdfPage = source.page;
-  navigateToPaper(source.paper_id);
 }
 
 function renderNotesPanel() {
@@ -2851,7 +2672,6 @@ async function saveSettings(event) {
     });
     state.settings = result.settings;
     updateProviderHint();
-    renderQaPanel();
     closeDialog("settingsDialog");
     toast("模型设置已保存");
   } catch (error) {
@@ -2998,17 +2818,6 @@ function bindEvents() {
       focusReaderModePanel(button.dataset.readerMode);
     });
   });
-  $("#quickReadButton").addEventListener("click", () => queueAnalysis("quick_read").catch(handleError));
-  $("#figureAnalysisButton").addEventListener("click", () => queueAnalysis("figure_analysis").catch(handleError));
-  $("#quickRunSelect").addEventListener("change", (event) => {
-    state.analysisSelections.quick_read = event.target.value;
-    renderAnalysisPanels();
-  });
-  $("#figureRunSelect").addEventListener("change", (event) => {
-    state.analysisSelections.figure_analysis = event.target.value;
-    renderAnalysisPanels();
-  });
-  $("#qaForm").addEventListener("submit", handleQaSubmit);
   $("#downloadMarkdownButton").addEventListener("click", downloadSummaryMarkdown);
   $("#translateSummaryButton").addEventListener("click", () => retrySummaryTranslation());
   $("#deletePaperButton").addEventListener("click", deleteCurrentPaper);
@@ -3065,7 +2874,6 @@ function bindEvents() {
     renderLibrary();
   });
   $("#clearSelectionButton").addEventListener("click", () => clearPaperSelection());
-  $("#batchQuickReadButton").addEventListener("click", () => queueSelectedQuickReads().catch(handleError));
   $("#batchTagsButton").addEventListener("click", showBatchTagsDialog);
   $("#batchDeleteButton").addEventListener("click", () => deleteSelectedPapers().catch(handleError));
   $("#batchToolbar").addEventListener("click", (event) => {
