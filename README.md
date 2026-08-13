@@ -1,5 +1,8 @@
 # PaperVault
 
+[![Latest Release](https://img.shields.io/github/v/release/skywuxuan/PaperVault?display_name=tag&sort=semver)](https://github.com/skywuxuan/PaperVault/releases/latest)
+[![Windows Release Build](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml/badge.svg)](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml)
+
 ## Windows 桌面版
 
 项目现在提供基于系统 WebView2 的 Windows 原生桌面入口，同时保留原有本地 Web 版本和全部 `/api/*` 接口。桌面版默认将数据库、论文和模型保存在 `%LOCALAPPDATA%\PaperVault`，不会写入安装目录。
@@ -17,6 +20,35 @@
 ```
 
 推荐的一目录构建输出位于 `dist\PaperVault\PaperVault.exe`。桌面架构、数据目录覆盖、Windows 打包以及为 macOS 保留的平台接口详见 [`docs/DESKTOP.md`](docs/DESKTOP.md)。
+
+## 版本与发布
+
+当前公开版本是 [`v1.0.0`](https://github.com/skywuxuan/PaperVault/releases/tag/v1.0.0)，这是 PaperVault Windows 桌面版的首个正式发行版。
+
+Windows 用户可在 [Releases](https://github.com/skywuxuan/PaperVault/releases) 页面下载 `PaperVault-v1.0.0-windows-x64.zip`。解压后运行 `PaperVault\PaperVault.exe` 即可；系统需要安装 Microsoft Edge WebView2 Runtime（Windows 10/11 通常已经自带）。用户数据保存在 `%LOCALAPPDATA%\PaperVault`，升级程序不会覆盖论文库。
+
+版本变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。发布流程由 `.github/workflows/windows-release.yml` 管理：推送形如 `v1.0.0` 的标签后，GitHub Actions 会在 Windows runner 上构建一目录桌面包、压缩 ZIP，并自动创建或更新对应的 GitHub Release。
+
+### 发行日志
+
+#### v1.0.0 · 2026-08-13
+
+- 首个正式 Windows 桌面发行版，提供可解压即用的一目录安装包。
+- 保留论文库、双语详细摘要、公式渲染、Markdown/JSON 导出和本地数据目录隔离。
+- 单词本弹窗增加已加入状态、美式音标和语音播放；移除“速读”、“图表分析”和“问论文”界面。
+- 发布标签会自动触发 Windows 构建并上传 `PaperVault-v1.0.0-windows-x64.zip`。
+
+完整变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+维护者发布新版本时执行：
+
+```powershell
+git add .
+git commit -m "release: prepare v1.0.0"
+git tag -a v1.0.0 -m "PaperVault v1.0.0"
+git push origin main
+git push origin v1.0.0
+```
 
 PaperVault 是一个完全运行在 Windows 本机的论文管理 WebUI。后端只监听 `127.0.0.1`，PDF、摘要、标签和模型配置均保存在项目的 `data` 目录，不需要外部数据库或公网服务。
 

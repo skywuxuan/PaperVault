@@ -225,6 +225,51 @@ async function loadVocabulary() {
   const data = await api("/api/vocabulary");
   state.vocabulary = data.entries || [];
   renderVocabulary();
+  if (state.vocabularyCandidate) updateWordPopoverState();
+}
+
+function vocabularyEntryFor(term) {
+  const normalized = String(term || "").trim().toLocaleLowerCase();
+  return state.vocabulary.find((entry) => String(entry.term_en || "").trim().toLocaleLowerCase() === normalized) || null;
+}
+
+function updateWordPopoverState() {
+  const candidate = state.vocabularyCandidate;
+  if (!candidate) return;
+  const button = $("#addVocabularyButton");
+  const existing = vocabularyEntryFor(candidate.term_en);
+  const loading = button.dataset.loading === "true";
+  const added = Boolean(existing);
+  button.disabled = loading || added || !candidate.translation_zh;
+  button.classList.toggle("is-added", added);
+  const emptyTranslation = !candidate.translation_zh && candidate.translationFailed;
+  button.disabled = loading || added || (!candidate.translation_zh && !emptyTranslation);
+  button.innerHTML = added
+    ? '<span aria-hidden="true">✓</span> 已加入单词本'
+    : emptyTranslation
+      ? '<span aria-hidden="true">✎</span> 编辑后加入'
+      : '<span aria-hidden="true">+</span> 加入单词本';
+  button.setAttribute("aria-label", added ? "已加入单词本" : emptyTranslation ? "编辑后加入" : "加入单词本");
+  button.title = added ? "已加入单词本" : emptyTranslation ? "编辑后补充释义" : "加入单词本";
+}
+
+function updateWordPopoverPronunciation() {
+  const candidate = state.vocabularyCandidate;
+  const button = $("#wordPopoverSpeakButton");
+  if (!candidate || !button) return;
+  const supported = Boolean(candidate.term_en) && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+  button.disabled = !supported;
+  button.title = supported ? "播放美式发音" : "暂无美式发音";
+}
+
+function speakWordPopoverTerm() {
+  const candidate = state.vocabularyCandidate;
+  if (!candidate || !("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(candidate.term_en);
+  utterance.lang = "en-US";
+  utterance.rate = 0.9;
+  window.speechSynthesis.speak(utterance);
 }
 
 function renderLibrary() {
@@ -825,13 +870,18 @@ function showVocabularyEditor(entry = null, draft = null) {
 async function addVocabularyCandidate() {
   const candidate = state.vocabularyCandidate;
   if (!candidate) return;
+  if (vocabularyEntryFor(candidate.term_en)) {
+    updateWordPopoverState();
+    return;
+  }
   if (!candidate.translation_zh) {
     showVocabularyEditor(null, candidate);
     return;
   }
   const button = $("#addVocabularyButton");
   button.disabled = true;
-  button.textContent = "正在加入...";
+  button.dataset.loading = "true";
+  button.innerHTML = '<span aria-hidden="true">…</span> 正在加入...';
   try {
     const result = await api("/api/vocabulary", {
       method: "POST",
@@ -847,8 +897,8 @@ async function addVocabularyCandidate() {
     closeWordPopover();
     toast(result.created ? "已加入单词本" : "该词条已在单词本中");
   } catch (error) {
-    button.disabled = false;
-    button.textContent = "加入单词本";
+    button.dataset.loading = "false";
+    updateWordPopoverState();
     handleError(error);
   }
 }
@@ -2348,7 +2398,7 @@ function englishWordAtPoint(event) {
   }
   if (!node || node.nodeType !== Node.TEXT_NODE) return "";
   const parent = node.parentElement;
-  if (!parent?.closest(".segment-text")) return "";
+  if (!parent?.closest(".segment-text, .structured-block-text")) return "";
   const text = node.textContent || "";
   const isWordCharacter = (character) => /[A-Za-z0-9+.#'\u2019-]/.test(character || "");
   let start = Math.min(offset, text.length);
@@ -2386,19 +2436,22 @@ async function translateAndShowWord(candidate, anchorRect) {
     candidate.definition_zh = result.definition_zh || "";
     state.vocabularyCandidate = candidate;
     $("#wordPopoverPhonetic").textContent = candidate.phonetic_us;
+    updateWordPopoverPronunciation();
     $("#wordPopoverTranslation").textContent = result.translation_zh;
     $("#wordPopoverTranslation").classList.remove("missing");
     $("#wordPopoverDefinition").textContent = result.definition_zh || "";
-    $("#addVocabularyButton").disabled = false;
-    $("#addVocabularyButton").textContent = "加入单词本";
+    $("#addVocabularyButton").dataset.loading = "false";
+    updateWordPopoverState();
     window.requestAnimationFrame(() => positionWordPopover($("#wordPopover"), anchorRect));
   } catch (error) {
     if (state.vocabularyCandidate?.requestId !== requestId) return;
     $("#wordPopoverTranslation").textContent = "翻译失败，可手动补充释义";
     $("#wordPopoverTranslation").classList.add("missing");
     $("#wordPopoverDefinition").textContent = "";
-    $("#addVocabularyButton").disabled = false;
-    $("#addVocabularyButton").textContent = "编辑后加入";
+    candidate.translationFailed = true;
+    $("#addVocabularyButton").dataset.loading = "false";
+    updateWordPopoverPronunciation();
+    updateWordPopoverState();
   }
 }
 
@@ -2407,12 +2460,14 @@ function showWordPopover(candidate, anchorRect, loading = false) {
   const popover = $("#wordPopover");
   $("#wordPopoverTerm").textContent = candidate.term_en;
   $("#wordPopoverPhonetic").textContent = candidate.phonetic_us || "";
+  updateWordPopoverPronunciation();
   const translation = $("#wordPopoverTranslation");
   translation.textContent = loading ? "正在翻译..." : candidate.translation_zh || "添加时补充中文释义";
   translation.classList.toggle("missing", loading || !candidate.translation_zh);
   $("#wordPopoverDefinition").textContent = candidate.definition_zh || "";
-  $("#addVocabularyButton").disabled = loading;
-  $("#addVocabularyButton").textContent = loading ? "翻译中" : "加入单词本";
+  $("#addVocabularyButton").dataset.loading = String(loading);
+  updateWordPopoverState();
+  if (loading) $("#addVocabularyButton").innerHTML = '<span aria-hidden="true">…</span> 翻译中';
   popover.hidden = false;
 
   positionWordPopover(popover, anchorRect);
@@ -2429,6 +2484,7 @@ function positionWordPopover(popover, anchorRect) {
 }
 
 function closeWordPopover() {
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   $("#wordPopover").hidden = true;
   state.vocabularyCandidate = null;
 }
@@ -3017,6 +3073,7 @@ function bindEvents() {
   $("#settingsForm").addEventListener("submit", saveSettings);
   $("#vocabularyForm").addEventListener("submit", handleVocabularyForm);
   $("#addVocabularyButton").addEventListener("click", addVocabularyCandidate);
+  $("#wordPopoverSpeakButton").addEventListener("click", speakWordPopoverTerm);
   $("#closeWordPopover").addEventListener("click", closeWordPopover);
   $("#highlightSelectionButton").addEventListener("click", () => createPdfAnnotation(false).catch(handleError));
   $("#noteSelectionButton").addEventListener("click", () => createPdfAnnotation(true).catch(handleError));

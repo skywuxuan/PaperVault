@@ -521,7 +521,11 @@ h3.structured-heading { margin: 22px 0 9px; color: #31413c; font-size: 13px; }
 .word-popover-heading { min-width: 0; padding: 0 25px 8px 0; border-bottom: 1px solid var(--line); }
 .word-popover-term, .word-popover-phonetic, .word-popover-translation { display: block; overflow-wrap: anywhere; }
 .word-popover-term { color: var(--ink); font-family: Georgia, "Times New Roman", serif; font-size: 17px; font-weight: 700; line-height: 1.2; }
-.word-popover-phonetic { min-height: 14px; margin-top: 2px; color: var(--blue); font-family: "Segoe UI", sans-serif; font-size: 10px; line-height: 1.35; }
+.word-popover-pronunciation { display: flex; align-items: center; gap: 6px; min-height: 22px; margin-top: 2px; }
+.word-popover-phonetic { min-height: 14px; color: var(--blue); font-family: "Segoe UI", sans-serif; font-size: 10px; line-height: 1.35; }
+.word-popover-speak { width: 25px; height: 24px; display: inline-grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--blue); font-size: 12px; line-height: 1; cursor: pointer; }
+.word-popover-speak:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-soft); }
+.word-popover-speak:disabled { opacity: .4; cursor: not-allowed; }
 .word-popover-meaning { display: grid; grid-template-columns: 29px minmax(0, 1fr); gap: 7px; padding-top: 8px; }
 .word-popover-label { padding-top: 2px; color: var(--muted); font-size: 9px; font-weight: 750; }
 .word-popover-translation { min-height: 18px; color: var(--teal-dark); font-size: 12px; font-weight: 650; line-height: 1.45; }
@@ -530,6 +534,7 @@ h3.structured-heading { margin: 22px 0 9px; color: #31413c; font-size: 13px; }
 .word-popover-definition:empty { display: none; }
 .word-popover-footer { display: flex; justify-content: flex-end; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line); }
 .word-popover-add { min-height: 29px; padding: 0 10px; border-radius: 4px; font-size: 10px; }
+.word-popover-add.is-added { border-color: #99c8bf; background: var(--teal-soft); color: var(--teal-dark); cursor: default; }
 .word-popover-close { position: absolute; top: 4px; right: 4px; width: 25px; height: 25px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; }
 .word-popover-close:hover { color: var(--ink); }
 
