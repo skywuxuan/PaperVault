@@ -11,7 +11,7 @@ from typing import Any
 from backend.llm import SummaryError, request_chat_completion
 
 
-DEEP_SUMMARY_PROMPT_VERSION = "deep-summary-blocks-v1"
+DEEP_SUMMARY_PROMPT_VERSION = "deep-summary-formula-v3"
 MAX_REPORT_OUTPUT_TOKENS = 32000
 TRANSLATION_OUTPUT_TOKENS = 32000
 TRANSLATION_CHUNK_TOKENS = 2400
@@ -47,6 +47,11 @@ quantitative results demonstrate. Preserve exact model names, datasets, sample
 counts, ratios, parameter counts, hyperparameters, formulas, metrics, baseline
 values and before/after results.
 
+Write mathematical expressions in standard LaTeX. Use \\( ... \\) for inline
+mathematics and \\[ ... \\] for displayed mathematics. Do not leave formulas as
+Unicode square-root, membership, subscript, superscript or caret notation in
+ordinary prose.
+
 Distinguish clearly between:
 - the base model architecture;
 - newly proposed components;
@@ -77,8 +82,10 @@ explanations and bullets only for genuinely parallel facts. Every page reference
 match a supplied [Page N] label. Do not return Chinese or markdown."""
 
 
-TRANSLATION_PROMPT = """Translate the supplied structured English research report into fluent professional
-Chinese.
+TRANSLATION_PROMPT = """Rewrite the supplied structured English research report as a clear, detailed,
+professional Chinese research explanation. The English report is the canonical structure, while the
+page-labelled source evidence is provided to resolve terminology, omitted context, and technical
+relationships. This is a faithful evidence-grounded rewrite, not a word-for-word translation.
 
 Return strict JSON containing translations only. Preserve every block id and the
 original order. Translate exactly one block into exactly one block. Do not merge,
@@ -86,9 +93,14 @@ split, omit or add information.
 
 Preserve all numbers, formulas, model names, dataset names, metric names, citations
 and standard acronyms. Translate ordinary technical terminology consistently.
+Keep mathematical expressions in standard LaTeX using the delimiters supplied by
+the English report (\\( ... \\) inline or \\[ ... \\] displayed). Do not convert
+formulas into plain Unicode or caret notation.
 Do not change the certainty, scope, factual meaning or logical relationship of any
-statement. Heading translations should be concise and suitable for a professional
-research report.
+statement. Improve Chinese readability by making subjects, causal links, abbreviations,
+and technical terms explicit when the supplied evidence supports them. Heading translations
+should be concise and suitable for a professional research report. Keep paragraphs coherent
+and explanatory rather than producing telegraphic fragments.
 
 Return no English blocks, page references, markdown or commentary."""
 
@@ -308,24 +320,36 @@ def generate_english_report(
 
 
 def translate_report_blocks(
-    blocks: list[dict[str, Any]], settings: dict[str, str]
+    blocks: list[dict[str, Any]],
+    settings: dict[str, str],
+    source_pages: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if settings.get("provider") != "openai_compatible":
         raise SummaryError("Chinese report translation requires an OpenAI-compatible model")
     if not blocks:
         raise SummaryError("No English report blocks are available for translation")
     model = translation_model(settings)
+    evidence_by_page = _source_evidence_by_page(source_pages or [])
     chunks = _translation_chunks(blocks)
     chunk_results: list[tuple[list[dict[str, str]], int] | None] = [None] * len(chunks)
     if len(chunks) == 1:
-        chunk_results[0] = _translate_chunk_resilient(chunks[0], settings, model, "")
+        chunk_results[0] = _translate_chunk_resilient(
+            chunks[0], settings, model, "", evidence_by_page
+        )
     else:
         with ThreadPoolExecutor(
             max_workers=min(TRANSLATION_MAX_WORKERS, len(chunks)),
             thread_name_prefix="paper-translation",
         ) as executor:
             futures = {
-                executor.submit(_translate_chunk_resilient, chunk, settings, model, ""): index
+                executor.submit(
+                    _translate_chunk_resilient,
+                    chunk,
+                    settings,
+                    model,
+                    "",
+                    evidence_by_page,
+                ): index
                 for index, chunk in enumerate(chunks)
             }
             try:
@@ -347,7 +371,11 @@ def translate_report_blocks(
 
     by_id = {item["id"]: item["text_zh"] for item in translations}
     merged = [{**block, "text_zh": by_id[block["id"]]} for block in blocks]
-    return merged, {"model": model, "token_count": usage_total}
+    return merged, {
+        "model": model,
+        "token_count": usage_total,
+        "source_grounded": bool(evidence_by_page),
+    }
 
 
 def analysis_model(settings: dict[str, str]) -> str:
@@ -496,6 +524,7 @@ def _request_translation(
     settings: dict[str, str],
     model: str,
     validation_error: str = "",
+    evidence_by_page: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "blocks": [
@@ -504,7 +533,11 @@ def _request_translation(
         ]
     }
     prefix = f"The previous response failed validation: {validation_error}\n\n" if validation_error else ""
-    serialized_payload = json.dumps(payload, ensure_ascii=False)
+    evidence = _evidence_for_blocks(blocks, evidence_by_page or {})
+    serialized_payload = json.dumps(
+        {"blocks": payload["blocks"], "source_evidence": evidence},
+        ensure_ascii=False,
+    )
     output_tokens = min(
         TRANSLATION_OUTPUT_TOKENS,
         max(2048, estimate_tokens(serialized_payload) * 3),
@@ -636,6 +669,7 @@ def _accept_translation_candidate(
     blocks: list[dict[str, Any]],
     settings: dict[str, str],
     model: str,
+    evidence_by_page: dict[int, str] | None = None,
 ) -> tuple[list[dict[str, str]], int]:
     candidate = _parse_translation_candidate(content, blocks)
     mismatches = _numeric_mismatch_details(candidate, blocks)
@@ -643,7 +677,9 @@ def _accept_translation_candidate(
         return candidate, 0
     mismatch_ids = {item["id"] for item in mismatches}
     correction_blocks = [block for block in blocks if block["id"] in mismatch_ids]
-    corrected, usage = _translate_numeric_corrections(correction_blocks, settings, model)
+    corrected, usage = _translate_numeric_corrections(
+        correction_blocks, settings, model, evidence_by_page=evidence_by_page
+    )
     corrected_by_id = {item["id"]: item for item in corrected}
     merged = [corrected_by_id.get(item["id"], item) for item in candidate]
     _validate_translation_numbers(merged, blocks)
@@ -715,6 +751,7 @@ def _translate_numeric_corrections(
     settings: dict[str, str],
     model: str,
     previous_error: str = "",
+    evidence_by_page: dict[int, str] | None = None,
 ) -> tuple[list[dict[str, str]], int]:
     protected, replacements = _protect_numeric_tokens(blocks)
     instruction = (
@@ -726,7 +763,9 @@ def _translate_numeric_corrections(
     validation_error = f"{previous_error} {instruction}".strip()
     usage_total = 0
     for _ in range(2):
-        result = _request_translation(protected, settings, model, validation_error)
+        result = _request_translation(
+            protected, settings, model, validation_error, evidence_by_page
+        )
         usage_total += _usage_tokens(result.get("usage", {}))
         if _is_truncated(result.get("finish_reason")):
             validation_error = f"The previous response was truncated. {instruction}"
@@ -742,22 +781,22 @@ def _translate_numeric_corrections(
         segments = _split_translation_block(blocks[0])
         if len(segments) > 1:
             segment_translations, segment_usage = _translate_numeric_corrections(
-                segments, settings, model, validation_error
+                segments, settings, model, validation_error, evidence_by_page
             )
             combined = " ".join(item["text_zh"] for item in segment_translations)
             restored = [{"id": blocks[0]["id"], "text_zh": combined}]
             _validate_translation_numbers(restored, blocks)
             return restored, usage_total + segment_usage
         restored, span_usage = _translate_numeric_spans(
-            blocks[0], settings, model, validation_error
+            blocks[0], settings, model, validation_error, evidence_by_page
         )
         return [restored], usage_total + span_usage
     midpoint = len(blocks) // 2
     left, left_usage = _translate_numeric_corrections(
-        blocks[:midpoint], settings, model, validation_error
+        blocks[:midpoint], settings, model, validation_error, evidence_by_page
     )
     right, right_usage = _translate_numeric_corrections(
-        blocks[midpoint:], settings, model, validation_error
+        blocks[midpoint:], settings, model, validation_error, evidence_by_page
     )
     return left + right, usage_total + left_usage + right_usage
 
@@ -786,6 +825,7 @@ def _translate_numeric_spans(
     settings: dict[str, str],
     model: str,
     previous_error: str,
+    evidence_by_page: dict[int, str] | None = None,
 ) -> tuple[dict[str, str], int]:
     text = str(block["text_en"])
     parts: list[tuple[str, str]] = []
@@ -801,7 +841,7 @@ def _translate_numeric_spans(
     if not span_blocks:
         raise SummaryError(previous_error or "Chinese translation failed numeric validation")
     translated_spans, usage = _translate_text_spans_resilient(
-        span_blocks, settings, model, previous_error
+        span_blocks, settings, model, previous_error, evidence_by_page
     )
     translated_by_id = {item["id"]: item["text_zh"] for item in translated_spans}
     combined = "".join(
@@ -838,6 +878,7 @@ def _translate_text_spans_resilient(
     settings: dict[str, str],
     model: str,
     previous_error: str,
+    evidence_by_page: dict[int, str] | None = None,
 ) -> tuple[list[dict[str, str]], int]:
     instruction = (
         "Translate each supplied text fragment literally and preserve every fragment ID. "
@@ -847,7 +888,9 @@ def _translate_text_spans_resilient(
     validation_error = f"{previous_error} {instruction}".strip()
     usage_total = 0
     for _ in range(2):
-        result = _request_translation(blocks, settings, model, validation_error)
+        result = _request_translation(
+            blocks, settings, model, validation_error, evidence_by_page
+        )
         usage_total += _usage_tokens(result.get("usage", {}))
         if _is_truncated(result.get("finish_reason")):
             validation_error = f"The previous response was truncated. {instruction}"
@@ -867,10 +910,10 @@ def _translate_text_spans_resilient(
         raise SummaryError(validation_error or "Chinese text span translation failed")
     midpoint = len(blocks) // 2
     left, left_usage = _translate_text_spans_resilient(
-        blocks[:midpoint], settings, model, validation_error
+        blocks[:midpoint], settings, model, validation_error, evidence_by_page
     )
     right, right_usage = _translate_text_spans_resilient(
-        blocks[midpoint:], settings, model, validation_error
+        blocks[midpoint:], settings, model, validation_error, evidence_by_page
     )
     return left + right, usage_total + left_usage + right_usage
 
@@ -898,18 +941,21 @@ def _translate_chunk_resilient(
     settings: dict[str, str],
     model: str,
     previous_error: str,
+    evidence_by_page: dict[int, str] | None = None,
 ) -> tuple[list[dict[str, str]], int]:
     usage_total = 0
     validation_error = previous_error
     for _ in range(2):
-        result = _request_translation(blocks, settings, model, validation_error)
+        result = _request_translation(
+            blocks, settings, model, validation_error, evidence_by_page
+        )
         usage_total += _usage_tokens(result.get("usage", {}))
         if _is_truncated(result.get("finish_reason")):
             validation_error = "The previous translation was truncated. Return every requested block."
             continue
         try:
             translations, correction_usage = _accept_translation_candidate(
-                result["content"], blocks, settings, model
+                result["content"], blocks, settings, model, evidence_by_page
             )
             return translations, usage_total + correction_usage
         except SummaryError as exc:
@@ -918,10 +964,10 @@ def _translate_chunk_resilient(
         raise SummaryError(validation_error or "Chinese translation failed block validation")
     midpoint = len(blocks) // 2
     left, left_usage = _translate_chunk_resilient(
-        blocks[:midpoint], settings, model, validation_error
+        blocks[:midpoint], settings, model, validation_error, evidence_by_page
     )
     right, right_usage = _translate_chunk_resilient(
-        blocks[midpoint:], settings, model, validation_error
+        blocks[midpoint:], settings, model, validation_error, evidence_by_page
     )
     return left + right, usage_total + left_usage + right_usage
 
@@ -934,6 +980,43 @@ def _blocks_as_page_evidence(blocks: list[dict[str, Any]]) -> str:
         level = f"Heading level {block.get('level', 2)}: " if block["type"] == "heading" else ""
         parts.append(f"{labels}\n{level}{block['text_en']}")
     return "\n\n".join(parts)
+
+
+def _source_evidence_by_page(page_texts: list[dict[str, Any]]) -> dict[int, str]:
+    evidence: dict[int, str] = {}
+    for index, page in enumerate(prepare_page_documents(page_texts), start=1):
+        try:
+            page_number = max(1, int(page.get("page", index)))
+        except (TypeError, ValueError):
+            page_number = index
+        text = str(page.get("text", "")).strip()
+        if text:
+            evidence[page_number] = text[:6000]
+    return evidence
+
+
+def _evidence_for_blocks(
+    blocks: list[dict[str, Any]], evidence_by_page: dict[int, str]
+) -> list[dict[str, Any]]:
+    page_refs = sorted(
+        {
+            int(page)
+            for block in blocks
+            for page in block.get("page_refs", [])
+            if str(page).isdigit()
+        }
+    )
+    selected: list[dict[str, Any]] = []
+    total_chars = 0
+    for page in page_refs:
+        text = evidence_by_page.get(page, "")
+        if not text or total_chars >= 40000:
+            continue
+        remaining = 40000 - total_chars
+        excerpt = text[:remaining]
+        selected.append({"page": page, "text": excerpt})
+        total_chars += len(excerpt)
+    return selected
 
 
 def _fill_heading_page_refs(blocks: list[dict[str, Any]]) -> None:

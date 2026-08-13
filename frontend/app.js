@@ -617,7 +617,7 @@ function summaryBlocksToMarkdown(blocks, language, headingDepthOffset = 0) {
   const fallbackKey = language === "zh" ? "text_en" : "text_zh";
   const lines = [];
   for (const block of blocks || []) {
-    const text = String(block[key] || block[fallbackKey] || "").trim();
+    const text = normalizeFormulaText(String(block[key] || block[fallbackKey] || "").trim());
     if (!text) continue;
     const refs = Array.isArray(block.page_refs) && block.page_refs.length
       ? ` _(p. ${block.page_refs.join(", ")})_`
@@ -2040,6 +2040,55 @@ function summarySegment(pair, index, language) {
 
 function appendSummaryText(container, text) {
   const important = /\b(?:Qwen2\.5-7B|Conformer-MoE|LLM-ASR|GLCLAP|GRPO|RADA|LoRA|KER|SACC|WER|Top-?\d+|\d+(?:\.\d+)?(?:%|[kKMB])?|\d+(?:\.\d+)?e-\d+)\b/g;
+  const normalized = normalizeFormulaText(text);
+  let cursor = 0;
+  for (const match of normalized.matchAll(MATH_DELIMITER_RE)) {
+    if (match.index > cursor) appendPlainSummaryText(container, normalized.slice(cursor, match.index), important);
+    container.append(renderMathSegment(match[0]));
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < normalized.length) appendPlainSummaryText(container, normalized.slice(cursor), important);
+  typesetMath(container);
+}
+
+const MATH_DELIMITER_RE = /(?:\\\[[\s\S]+?\\\]|\\\([^\n]+?\\\)|\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g;
+const RAW_EQUATION_START_RE = /(^|[^A-Za-z0-9\\_^{}])((?:\\(?:hat|mathcal|bar|tilde)\{[A-Za-z]+\}|[A-Za-zΑ-Ωα-ω][A-Za-z0-9Α-Ωα-ω]*)(?:(?:_\{[^{}\n]+\})|_[A-Za-z0-9]+|(?:\^\{[^{}\n]+\})|\^[A-Za-z0-9]+|\^)*\s*=)/g;
+
+function renderMathSegment(source) {
+  const wrapper = make("span", "math-expression");
+  if (source.startsWith("\\[") || source.startsWith("$$")) wrapper.classList.add("math-display");
+  const sourceNode = make("span", "math-source");
+  sourceNode.append(document.createTextNode(source));
+  const fallback = make("span", "math-fallback");
+  fallback.innerHTML = renderFormulaFallback(source);
+  wrapper.append(sourceNode, fallback);
+  return wrapper;
+}
+
+function renderFormulaFallback(source) {
+  let formula = String(source || "").replace(/^(?:\\\[|\\\(|\$\$|\$)|(?:\\\]|\\\)|\$\$|\$)$/g, "").trim();
+  formula = formula.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  formula = formula
+    .replace(/\\text\{([^{}]*)\}/g, "$1")
+    .replace(/\\operatorname\{([^{}]*)\}/g, '<span class="math-operator">$1</span>')
+    .replace(/\\mathbb\{R\}/g, '<span class="math-blackboard">R</span>')
+    .replace(/\\sqrt\{([^{}]*)\}/g, '<span class="math-root"><span class="math-root-symbol">√</span><span class="math-root-value">$1</span></span>')
+    .replace(/\\cdot/g, "·")
+    .replace(/\\times/g, "×")
+    .replace(/\\in/g, "∈")
+    .replace(/\\leq/g, "≤")
+    .replace(/\\geq/g, "≥")
+    .replace(/\\approx/g, "≈")
+    .replace(/\\,/g, " ")
+    .replace(/([A-Za-z0-9)])_\{([^{}]+)\}/g, "$1<sub>$2</sub>")
+    .replace(/([A-Za-z0-9)])_([A-Za-z0-9]+)/g, "$1<sub>$2</sub>")
+    .replace(/([A-Za-z0-9)])\^\{([^{}]+)\}/g, "$1<sup>$2</sup>")
+    .replace(/([A-Za-z0-9)])\^([A-Za-z0-9]+)/g, "$1<sup>$2</sup>")
+    .replace(/[{}]/g, "");
+  return formula;
+}
+
+function appendPlainSummaryText(container, text, important) {
   let cursor = 0;
   for (const match of text.matchAll(important)) {
     if (match.index > cursor) container.append(document.createTextNode(text.slice(cursor, match.index)));
@@ -2049,6 +2098,127 @@ function appendSummaryText(container, text) {
   }
   if (cursor < text.length) container.append(document.createTextNode(text.slice(cursor)));
 }
+
+function normalizeFormulaText(text) {
+  const protectedMath = [];
+  const storeFormula = (formula, display = formula.trim().length > 58) => {
+    const marker = `@@PVMATH${protectedMath.length}@@`;
+    protectedMath.push(display ? `\\[${formula.trim()}\\]` : `\\(${formula.trim()}\\)`);
+    return marker;
+  };
+  let value = String(text || "").replace(MATH_DELIMITER_RE, (source) => {
+    const display = source.startsWith("\\[") || source.startsWith("$$");
+    const formula = source.replace(/^(?:\\\[|\\\(|\$\$|\$)|(?:\\\]|\\\)|\$\$|\$)$/g, "");
+    return storeFormula(normalizeFormulaBody(formula), display);
+  });
+  value = wrapRawEquations(value, (formula) => storeFormula(normalizeFormulaBody(formula)));
+  value = protectBareLatex(value, storeFormula);
+  value = value.replace(
+    /((?:(?:\\(?:hat|mathcal|bar|tilde)\{[A-Za-z]+\}|[A-Za-zΑ-Ωα-ω])(?:(?:_\{[^{}\n]+\})|_[A-Za-z0-9]+|(?:\^\{[^{}\n]+\})|\^[A-Za-z0-9]+)*\s*,\s*)*(?:\\(?:hat|mathcal|bar|tilde)\{[A-Za-z]+\}|[A-Za-zΑ-Ωα-ω])(?:(?:_\{[^{}\n]+\})|_[A-Za-z0-9]+|(?:\^\{[^{}\n]+\})|\^[A-Za-z0-9]+)*\s*∈\s*R(?:\^\([^\n)]+\)|\^\{[^{}\n]+\}|\^[A-Za-z0-9]+)?)/g,
+    (formula) => storeFormula(normalizeFormulaBody(formula), false),
+  );
+  value = value.replace(
+    /(\\(?:hat|mathcal|bar|tilde)\{[A-Za-z]+\}(?:(?:_\{[^{}\n]+\})|_[A-Za-z0-9]{1,3}|(?:\^\{[^{}\n]+\})|\^[A-Za-z0-9]+)*|[A-Za-zΑ-Ωα-ω](?:(?:_\{[^{}\n]+\})|_[A-Za-z0-9]{1,3}|(?:\^\{[^{}\n]+\})|\^[A-Za-z0-9]+)+)/g,
+    (formula) => storeFormula(normalizeFormulaBody(formula), false),
+  );
+  return value.replace(/@@PVMATH(\d+)@@/g, (_, index) => protectedMath[Number(index)] || "");
+}
+
+function protectBareLatex(value, storeFormula) {
+  return value.replace(
+    /(\\(?:hat|mathcal|bar|tilde|text|operatorname)\{(?:[^{}]|\{[^{}]*\})+\}(?:(?:_\{[^{}]+\})|_[A-Za-z0-9]+|(?:\^\{[^{}]+\})|\^[A-Za-z0-9]+)*|\\\{[^{}\n]+\\\}_\{[^{}]+\}\^[^\s，,。！？；;]+|\\\{[^{}\n]+\\\}_[A-Za-z0-9]+\^[A-Za-z0-9]+|\{[A-Za-z0-9]+(?:_[A-Za-z0-9]+)?\}_\{[^{}]+\}\^[^\s，,。！？；;]+|\{[A-Za-z0-9]+(?:_[A-Za-z0-9]+)?\}_[A-Za-z0-9]+\^[A-Za-z0-9]+)/g,
+    (formula) => storeFormula(normalizeFormulaBody(formula), false),
+  );
+}
+
+function normalizeFormulaBody(source) {
+  let formula = String(source || "").trim();
+  formula = formula.replace(/^([A-Za-zΑ-Ωα-ω])\^\s*=/, (_, symbol) => `\\hat{${symbol}} =`);
+  formula = formula.replace(/\^⊤/g, () => String.raw`^{\top}`);
+  formula = formula.replace(/⊤/g, () => String.raw`\top`);
+  formula = formula.replace(/∈\s*R\^\(([^\n)]+)\)/g, (_, dimension) => `\\in \\mathbb{R}^{${normalizeFormulaScripts(dimension).replace(/×/g, String.raw`\times `)}}`);
+  formula = formula.replace(/∈\s*R\^([A-Za-z0-9]+)/g, (_, dimension) => `\\in \\mathbb{R}^{${dimension}}`);
+  formula = formula.replace(/∈\s*R\b/g, () => String.raw`\in \mathbb{R}`);
+  formula = formula.replace(/√\s*\(?([A-Za-z0-9_{}+\-]+)\)?/g, (_, radicand) => `\\sqrt{${normalizeFormulaScripts(radicand)}}`);
+  formula = formula.replace(/\^\(([^)]+)\)/g, (_, exponent) => `^{${exponent}}`);
+  formula = normalizeFormulaScripts(formula);
+  formula = formula.replace(/(?<![\\{])\bSoftmax\b/g, () => String.raw`\operatorname{Softmax}`);
+  formula = formula.replace(/(?<![\\{])\bReLU\b/g, () => String.raw`\operatorname{ReLU}`);
+  formula = formula.replace(/(?<![\\{])\b(argmax|max|min|log|exp|sim)\b/g, (_, name) => `\\operatorname{${name}}`);
+  formula = formula.replace(/⊕/g, () => String.raw`\oplus`);
+  formula = formula.replace(/∑/g, () => String.raw`\sum`);
+  formula = formula.replace(/∪/g, () => String.raw`\cup`);
+  formula = formula.replace(/·/g, () => String.raw`\cdot`);
+  return formula;
+}
+
+function normalizeFormulaScripts(source) {
+  return String(source).replace(/([A-Za-z0-9])_([A-Za-z0-9]+)/g, "$1_{$2}");
+}
+
+function wrapRawEquations(value, wrapFormula) {
+  let output = "";
+  let cursor = 0;
+  RAW_EQUATION_START_RE.lastIndex = 0;
+  let match;
+  while ((match = RAW_EQUATION_START_RE.exec(value))) {
+    const start = match.index + match[1].length;
+    if (start < cursor) continue;
+    const end = findRawEquationEnd(value, start);
+    if (end <= start || end - start > 1600) continue;
+    output += value.slice(cursor, start) + wrapFormula(value.slice(start, end));
+    cursor = end;
+    RAW_EQUATION_START_RE.lastIndex = end;
+  }
+  return cursor ? output + value.slice(cursor) : value;
+}
+
+function findRawEquationEnd(value, start) {
+  let parentheses = 0;
+  let braces = 0;
+  let foundEquals = false;
+  for (let index = start; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "=") foundEquals = true;
+    if (char === "(") parentheses += 1;
+    if (char === ")") parentheses = Math.max(0, parentheses - 1);
+    if (char === "{") braces += 1;
+    if (char === "}") braces = Math.max(0, braces - 1);
+    if (!foundEquals || parentheses !== 0 || braces !== 0) continue;
+    const rest = value.slice(index + 1);
+    if (char === "\n" || char === "。" || char === "！" || char === "？" || char === "；") return index;
+    if (char === "，") return index;
+    if (char === "," && !isThousandsSeparator(value, index)) return index;
+    if (char === "." && !/\d/.test(value[index - 1] || "") && !/^\d/.test(rest)) return index;
+    if ((char === ")" || char === "]") && /^\s+(?:controls?|denotes?|represents?|indicates?|gives?|produces?|is|are|was|were)\b/i.test(rest)) return index + 1;
+    if (/[\u3400-\u9fff]/.test(char)) return index;
+  }
+  return foundEquals && parentheses === 0 && braces === 0 ? value.length : -1;
+}
+
+function isThousandsSeparator(value, index) {
+  if (value[index] !== "," || !/\d/.test(value[index - 1] || "")) return false;
+  return /^\d/.test(value.slice(index + 1));
+}
+
+function appendMathText(container, text) {
+  container.append(document.createTextNode(String(text)));
+}
+
+function typesetMath(container) {
+  if (!window.MathJax?.typesetPromise || container.querySelector("mjx-container") || container.dataset.mathjaxPending === "1") return;
+  container.dataset.mathjaxPending = "1";
+  window.MathJax.typesetPromise([container]).then(() => {
+    container.dataset.mathjaxPending = "0";
+    container.classList.add("mathjax-ready");
+  }).catch(() => {
+    container.dataset.mathjaxPending = "0";
+  });
+}
+
+window.addEventListener("load", () => {
+  typesetMath(document.body);
+});
 
 function downloadSummaryMarkdown() {
   const paper = state.currentPaper;

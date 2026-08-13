@@ -312,6 +312,22 @@ html.desktop-runtime .paper-row { content-visibility: auto; contain-intrinsic-si
 .chinese-panel .summary-key-term { color: #0f5e57; }
 .structured-document-heading { margin-bottom: 24px; }
 .structured-block { position: relative; margin: 0; color: #26312e; cursor: text; overflow-wrap: anywhere; scroll-margin-top: 12px; transition: background-color 120ms ease, box-shadow 120ms ease; }
+.structured-block mjx-container { margin: .22em .08em; font-size: 1.04em; }
+.structured-paragraph mjx-container[display="true"], .structured-bullet mjx-container[display="true"] { margin: .65em 0; overflow-x: auto; overflow-y: hidden; padding: .2em 0; }
+.chinese-panel .structured-block mjx-container { font-size: 1.06em; }
+.math-expression { display: inline-flex; align-items: baseline; max-width: 100%; vertical-align: baseline; }
+.math-expression.math-display { display: block; width: 100%; overflow-x: auto; overflow-y: hidden; padding: .2em 0; }
+.math-display .math-source, .math-display .math-fallback { min-width: max-content; }
+.math-source { display: none; }
+.math-fallback { display: inline-flex; font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif; font-size: 1.08em; line-height: 1.35; white-space: nowrap; }
+.math-fallback sub, .math-fallback sup { font-size: .72em; line-height: 0; }
+.math-root { display: inline-flex; align-items: flex-start; }
+.math-root-symbol { font-size: 1.2em; line-height: .9; }
+.math-root-value { border-top: 1px solid currentColor; padding: 0 .08em; }
+.math-operator { font-family: inherit; font-style: normal; }
+.math-blackboard { font-family: "Cambria Math", "STIX Two Math", serif; font-weight: 600; }
+.mathjax-ready .math-source { display: inline; }
+.mathjax-ready .math-fallback { display: none; }
 .structured-block:focus-visible { outline: 2px solid rgba(52, 97, 141, .3); outline-offset: 2px; }
 .structured-block.active { background: var(--blue-soft); box-shadow: -6px 0 0 var(--blue); }
 .chinese-panel .structured-block.active { background: var(--teal-soft); box-shadow: -6px 0 0 var(--teal); }

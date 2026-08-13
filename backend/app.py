@@ -1075,7 +1075,7 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
     def _translate_summary_blocks(
         self, paper_id: str, settings: dict[str, str]
     ) -> dict[str, Any]:
-        paper = self.server.db.get_paper(paper_id)
+        paper = self.server.db.get_paper(paper_id, include_text=True)
         if paper is None:
             raise SummaryError("Paper is unavailable")
         english_blocks = [
@@ -1083,7 +1083,11 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             for block in paper.get("summary_blocks", [])
             if isinstance(block, dict)
         ]
-        merged, metadata = translate_report_blocks(english_blocks, settings)
+        merged, metadata = translate_report_blocks(
+            english_blocks,
+            settings,
+            self._summary_page_texts(paper),
+        )
         updated = self.server.db.update_paper(
             paper_id,
             {

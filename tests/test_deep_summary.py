@@ -280,6 +280,27 @@ class DeepSummaryTranslationTestCase(unittest.TestCase):
         self.assertNotIn("input_image", serialized)
         self.assertNotIn('"file"', serialized)
 
+    def test_translation_request_includes_page_grounded_source_evidence(self) -> None:
+        response = completion(
+            {
+                "translations": [
+                    {"id": "heading-001", "text_zh": "评测结果"},
+                    {"id": "paragraph-001", "text_zh": "WER 从 12.5% 改善到 9.1%。"},
+                ]
+            }
+        )
+        with patch("backend.deep_summary.request_chat_completion", return_value=response) as request:
+            merged, metadata = translate_report_blocks(
+                self.blocks,
+                settings(),
+                [{"page": 4, "text": "The paper reports the WER improvement after retrieval."}],
+            )
+        payload = json.loads(request.call_args.args[0]["messages"][1]["content"])
+        self.assertEqual(payload["source_evidence"][0]["page"], 4)
+        self.assertIn("WER improvement", payload["source_evidence"][0]["text"])
+        self.assertTrue(metadata["source_grounded"])
+        self.assertEqual(merged[1]["text_zh"], "WER 从 12.5% 改善到 9.1%。")
+
     def test_translation_numeric_mismatch_never_changes_english_blocks(self) -> None:
         wrong_numbers = {
             "translations": [
