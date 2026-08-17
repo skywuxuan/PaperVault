@@ -3321,6 +3321,10 @@ async function init() {
     await Promise.all([loadTags(), loadSettings()]);
     await loadLibrary();
     await handleRoute();
+    if (!state.settings.api_key) {
+      showSettingsDialog();
+      toast("请先配置模型 API 和 Key，或从本地配置文件导入", "error");
+    }
   } catch (error) {
     handleError(error);
   }

@@ -123,6 +123,7 @@ PAPER_VAULT_ANALYSIS_REASONING_EFFORT=high
 ```
 
 `.env.local` 已被 Git 忽略。文件由浏览器在本地读取并预填表单，确认保存后写入本机 SQLite；后端不会从环境变量读取 Key。
+当数据库中尚未保存 Key 时，服务启动页面会自动打开“模型设置”，并在每次重新加载时继续提示，直到用户完成配置。
 
 深度总结实现位于 `backend/deep_summary.py`，通用模型适配位于 `backend/llm.py`。英文报告使用长文档 block 结构：
 
