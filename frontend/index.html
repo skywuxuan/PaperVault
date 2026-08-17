@@ -355,8 +355,13 @@
           </div>
           <p class="settings-inline-note">Pro 类模型通常更适合最终综合，但不会自动切换；英文分析和中文翻译始终按你的选择调用。</p>
           <label class="field"><span>API Key</span><input name="api_key" type="password" autocomplete="off" placeholder="保留现有密钥"></label>
+          <div class="settings-import-row">
+            <input id="modelSettingsFile" type="file" accept=".env,.json,.txt,application/json,text/plain" hidden>
+            <button id="importModelSettingsButton" class="secondary-button" type="button">从本地配置导入</button>
+            <span id="modelSettingsImportStatus">支持 .env.local、.env、JSON</span>
+          </div>
         </div>
-        <div class="local-note"><span aria-hidden="true">&#9632;</span><p>配置和密钥仅保存在本机 SQLite 数据库中，也可通过 <code>PAPER_VAULT_API_KEY</code> 环境变量提供。</p></div>
+        <div class="local-note"><span aria-hidden="true">&#9632;</span><p>本地配置文件仅在浏览器中读取并填入表单，不会上传文件。确认保存后，配置和密钥保存在本机 SQLite 数据库中；服务不会从环境变量读取 Key。</p></div>
       </div>
       <div class="modal-footer">
         <button class="secondary-button" type="button" data-close-dialog="settingsDialog">取消</button>

@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pymupdf
 
-from backend.llm import _apply_provider_controls, _parse_pairs, local_draft
+from backend.llm import (
+    _apply_provider_controls,
+    _parse_pairs,
+    _request_chat_completion_details,
+    local_draft,
+)
 from backend.offline_translation import translate_english_offline
 from backend.pronunciation import american_ipa
 from backend.pdf_parser import (
@@ -17,6 +24,26 @@ from backend.pdf_parser import (
 
 
 class SummaryFormatTestCase(unittest.TestCase):
+    def test_request_uses_saved_key_instead_of_environment_key(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "ok"}}]}
+        ).encode("utf-8")
+        with patch.dict(os.environ, {"PAPER_VAULT_API_KEY": "environment-key"}), patch(
+            "backend.llm.urllib.request.urlopen", return_value=response
+        ) as urlopen:
+            result = _request_chat_completion_details(
+                {"model": "test-model", "messages": []},
+                {
+                    "base_url": "https://example.com/v1",
+                    "api_key": "saved-key",
+                },
+                10,
+            )
+        self.assertEqual(result["content"], "ok")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer saved-key")
+
     def test_official_deepseek_v4_disables_default_thinking(self) -> None:
         payload = {"model": "deepseek-v4-flash"}
         _apply_provider_controls(

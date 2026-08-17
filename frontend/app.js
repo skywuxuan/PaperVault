@@ -2577,6 +2577,8 @@ function showSettingsDialog() {
   for (const [key, value] of Object.entries(state.settings)) {
     if (form.elements[key]) form.elements[key].value = value;
   }
+  $("#modelSettingsFile").value = "";
+  $("#modelSettingsImportStatus").textContent = "支持 .env.local、.env、JSON";
   updateRemoteSettingsVisibility();
   openDialog("settingsDialog");
 }
@@ -2584,6 +2586,92 @@ function showSettingsDialog() {
 function updateRemoteSettingsVisibility() {
   const provider = $("#settingsForm").elements.provider.value;
   $("#remoteSettings").classList.toggle("disabled", provider !== "openai_compatible");
+}
+
+const MODEL_SETTINGS_IMPORT_KEYS = {
+  provider: "provider",
+  paper_vault_provider: "provider",
+  base_url: "base_url",
+  paper_vault_base_url: "base_url",
+  model: "model",
+  paper_vault_model: "model",
+  analysis_model: "analysis_model",
+  paper_vault_analysis_model: "analysis_model",
+  translation_model: "translation_model",
+  paper_vault_translation_model: "translation_model",
+  context_window_tokens: "context_window_tokens",
+  paper_vault_context_window_tokens: "context_window_tokens",
+  analysis_reasoning_effort: "analysis_reasoning_effort",
+  paper_vault_analysis_reasoning_effort: "analysis_reasoning_effort",
+  api_key: "api_key",
+  paper_vault_api_key: "api_key",
+};
+
+function unquoteLocalSetting(value) {
+  const trimmed = String(value ?? "").trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+function parseLocalModelSettings(text) {
+  const source = String(text || "").replace(/^\uFEFF/, "").trim();
+  if (!source) throw new Error("配置文件为空");
+  let rawSettings;
+  if (source.startsWith("{")) {
+    rawSettings = JSON.parse(source);
+    if (!rawSettings || Array.isArray(rawSettings) || typeof rawSettings !== "object") {
+      throw new Error("JSON 配置必须是对象");
+    }
+  } else {
+    rawSettings = {};
+    for (const line of source.split(/\r?\n/)) {
+      const cleaned = line.trim().replace(/^export\s+/, "");
+      if (!cleaned || cleaned.startsWith("#")) continue;
+      const separator = cleaned.indexOf("=");
+      if (separator < 1) continue;
+      rawSettings[cleaned.slice(0, separator).trim()] = unquoteLocalSetting(cleaned.slice(separator + 1));
+    }
+  }
+  const settings = {};
+  for (const [key, value] of Object.entries(rawSettings)) {
+    const formKey = MODEL_SETTINGS_IMPORT_KEYS[String(key).trim().toLowerCase()];
+    if (!formKey || value === null || typeof value === "object") continue;
+    const normalizedValue = String(value).trim();
+    if (formKey === "api_key" && !normalizedValue) continue;
+    settings[formKey] = normalizedValue;
+  }
+  if (!Object.keys(settings).length) throw new Error("未找到可识别的模型配置");
+  if (!settings.provider && (settings.base_url || settings.model || settings.api_key)) {
+    settings.provider = "openai_compatible";
+  }
+  return settings;
+}
+
+async function importModelSettings(event) {
+  const file = event.currentTarget.files?.[0];
+  if (!file) return;
+  const status = $("#modelSettingsImportStatus");
+  try {
+    const settings = parseLocalModelSettings(await file.text());
+    const form = $("#settingsForm");
+    for (const [key, value] of Object.entries(settings)) {
+      if (form.elements[key]) form.elements[key].value = value;
+    }
+    updateRemoteSettingsVisibility();
+    status.textContent = `已从 ${file.name} 导入 ${Object.keys(settings).length} 项，保存后生效`;
+    toast("本地模型配置已填入，请确认后保存");
+  } catch (error) {
+    status.textContent = "导入失败，请检查文件格式";
+    toast(error.message || "无法读取本地配置", "error");
+  } finally {
+    event.currentTarget.value = "";
+  }
 }
 
 async function handleUpload(event) {
@@ -3071,6 +3159,8 @@ function bindEvents() {
   $("#editForm").addEventListener("submit", handleEdit);
   $("#newTagForm").addEventListener("submit", createTag);
   $("#settingsForm").addEventListener("submit", saveSettings);
+  $("#importModelSettingsButton").addEventListener("click", () => $("#modelSettingsFile").click());
+  $("#modelSettingsFile").addEventListener("change", importModelSettings);
   $("#vocabularyForm").addEventListener("submit", handleVocabularyForm);
   $("#addVocabularyButton").addEventListener("click", addVocabularyCandidate);
   $("#wordPopoverSpeakButton").addEventListener("click", speakWordPopoverTerm);

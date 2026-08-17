@@ -110,12 +110,19 @@ data/
 - 英文分析推理强度 `high` 或由用户显式选择的高成本 `max`；
 - API Key（无需鉴权的本地兼容服务可留空）；
 
-密钥也可通过环境变量提供，此时优先于数据库设置：
+也可以在“模型设置”中选择“从本地配置导入”，读取仓库根目录自行维护的 `.env.local`：
 
-```powershell
-$env:PAPER_VAULT_API_KEY = "your-key"
-.\start.ps1
+```env
+PAPER_VAULT_BASE_URL=https://api.openai.com/v1
+PAPER_VAULT_API_KEY=your-key
+PAPER_VAULT_MODEL=gpt-4.1-mini
+PAPER_VAULT_ANALYSIS_MODEL=
+PAPER_VAULT_TRANSLATION_MODEL=
+PAPER_VAULT_CONTEXT_WINDOW_TOKENS=
+PAPER_VAULT_ANALYSIS_REASONING_EFFORT=high
 ```
+
+`.env.local` 已被 Git 忽略。文件由浏览器在本地读取并预填表单，确认保存后写入本机 SQLite；后端不会从环境变量读取 Key。
 
 深度总结实现位于 `backend/deep_summary.py`，通用模型适配位于 `backend/llm.py`。英文报告使用长文档 block 结构：
 
