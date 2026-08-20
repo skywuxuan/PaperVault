@@ -3,6 +3,26 @@
 [![Latest Release](https://img.shields.io/github/v/release/skywuxuan/PaperVault?display_name=tag&sort=semver)](https://github.com/skywuxuan/PaperVault/releases/latest)
 [![Windows Release Build](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml/badge.svg)](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml)
 
+## 桌面版
+
+PaperVault 提供 Windows x64 和 Apple Silicon macOS 桌面包。两端复用同一套本地后端与界面，数据分别默认保存在 `%LOCALAPPDATA%\PaperVault` 和 `~/Library/Application Support/PaperVault`。
+
+Windows 构建：
+
+```powershell
+.\build-windows.ps1
+```
+
+Apple Silicon Mac 构建：
+
+```bash
+./build-macos.sh
+```
+
+产物分别位于 `dist\PaperVault\PaperVault.exe` 和 `dist/PaperVault.app`。推送 `v*` 标签后，GitHub Actions 会同时生成 `windows-x64.zip` 与 `macos-arm64.zip` 发布附件。macOS 包目前为未公证的自分发应用；正式对外发布前应通过 `PAPER_VAULT_CODESIGN_IDENTITY` 配置 Developer ID 签名并完成 Apple notarization。
+
+开发启动分别使用 `.\start-desktop.ps1` 和 `./start-desktop.sh`。完整说明见 [`docs/DESKTOP.md`](docs/DESKTOP.md)。
+
 ## Windows 桌面版
 
 项目现在提供基于系统 WebView2 的 Windows 原生桌面入口，同时保留原有本地 Web 版本和全部 `/api/*` 接口。桌面版默认将数据库、论文和模型保存在 `%LOCALAPPDATA%\PaperVault`，不会写入安装目录。
@@ -116,6 +136,8 @@ data/
 $env:PAPER_VAULT_API_KEY = "your-key"
 .\start.ps1
 ```
+
+源码开发会自动读取仓库根目录的 `.env.local`。`PAPER_VAULT_BASE_URL`、`PAPER_VAULT_API_KEY`、模型变量和 `PAPER_VAULT_DATA_DIR` 均优先于数据库设置；可复制 `.env.example` 作为模板。`.env.local` 已被 Git 忽略，也不会打入桌面安装包。
 
 深度总结实现位于 `backend/deep_summary.py`，通用模型适配位于 `backend/llm.py`。英文报告使用长文档 block 结构：
 

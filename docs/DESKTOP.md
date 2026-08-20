@@ -63,6 +63,48 @@ The one-directory build starts faster and is the default release format. The
 package uses the installed WebView2 Runtime instead of bundling a browser
 engine.
 
+## Apple Silicon macOS development
+
+Requirements:
+
+- An M-series Mac running a supported macOS release
+- Arm64 Python 3.10 or newer
+- Xcode Command Line Tools
+
+Start the native application:
+
+```bash
+./start-desktop.sh
+```
+
+Build the application bundle:
+
+```bash
+./build-macos.sh
+```
+
+The output is `dist/PaperVault.app`. The script rejects Intel Python and Intel runners so the resulting application and native dependencies are consistently arm64. To sign the bundle during the PyInstaller build, export a valid identity first:
+
+```bash
+export PAPER_VAULT_CODESIGN_IDENTITY="Developer ID Application: Example Company (TEAMID)"
+./build-macos.sh
+```
+
+Signing alone does not notarize the application. Public distribution should additionally submit the ZIP to Apple's notary service and staple the ticket. An unsigned local build can be opened from Finder with Control-click → Open when Gatekeeper blocks first launch.
+
+## Local environment
+
+Source launches automatically read `.env.local` from the project root. A typical development configuration is:
+
+```dotenv
+PAPER_VAULT_DATA_DIR=../aaa_file/data
+PAPER_VAULT_BASE_URL=https://api.openai.com/v1
+PAPER_VAULT_API_KEY=your-key
+PAPER_VAULT_MODEL=gpt-4.1-mini
+```
+
+Shell variables override `.env.local`, and these variables override values stored in SQLite. Relative `PAPER_VAULT_DATA_DIR` values are resolved from the environment file location. `.env.local` is ignored by Git and is not embedded into Windows or macOS packages; installed applications should use system environment variables or configure the model in the application settings.
+
 ## Platform contract
 
 `desktop/platforms.py` is the platform boundary used by the launcher:
@@ -70,13 +112,12 @@ engine.
 | Platform | Native renderer | Default data directory | Icon |
 | --- | --- | --- | --- |
 | Windows | Edge Chromium / WebView2 | `%LOCALAPPDATA%\PaperVault` | `.ico` |
-| macOS | Cocoa WKWebView | `~/Library/Application Support/PaperVault` | `.icns` |
+| Apple Silicon macOS | Cocoa WKWebView | `~/Library/Application Support/PaperVault` | `.icns` |
 | Linux | System webview | `$XDG_DATA_HOME/papervault` | `.png` |
 
 The desktop bridge intentionally exposes only application name, version,
 platform, and local data path. Paper records, settings, and model credentials
-continue to flow through the existing `/api/*` contract, so a future macOS
-bundle does not require a frontend or backend rewrite.
+continue to flow through the existing `/api/*` contract on both desktop platforms.
 
 ## Browser version
 
