@@ -436,17 +436,17 @@ def normalize_report(
 
 
 def _validate_heading_content(blocks: list[dict[str, Any]]) -> None:
-    previous_heading: dict[str, Any] | None = None
+    heading_run: list[dict[str, Any]] = []
     for block in blocks:
         if block["type"] == "heading":
-            if previous_heading is not None:
+            heading_run.append(block)
+            if len(heading_run) >= 3:
                 raise SummaryError(
-                    "Report contains consecutive headings without content blocks: "
-                    f"{previous_heading['text_en']} / {block['text_en']}"
+                    "Report contains three or more consecutive headings without content blocks: "
+                    + " / ".join(item["text_en"] for item in heading_run)
                 )
-            previous_heading = block
         elif block["type"] in {"paragraph", "bullet"}:
-            previous_heading = None
+            heading_run = []
 
 
 def _request_report(

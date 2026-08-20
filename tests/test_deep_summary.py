@@ -110,12 +110,28 @@ class DeepSummaryStructureTestCase(unittest.TestCase):
                     "blocks": [
                         {"type": "heading", "level": 2, "text_en": "Training", "page_refs": [3]},
                         {"type": "heading", "level": 2, "text_en": "Datasets", "page_refs": [4]},
+                        {"type": "heading", "level": 2, "text_en": "Metrics", "page_refs": [4]},
                         {"type": "paragraph", "text_en": "Dataset evidence.", "page_refs": [4]},
                     ],
                 },
                 {3, 4},
                 "Fallback",
             )
+
+    def test_report_allows_parent_and_child_headings(self) -> None:
+        report = normalize_report(
+            {
+                "paper_title": "Original Title",
+                "blocks": [
+                    {"type": "heading", "level": 2, "text_en": "Training", "page_refs": [3]},
+                    {"type": "heading", "level": 3, "text_en": "Datasets", "page_refs": [4]},
+                    {"type": "paragraph", "text_en": "Dataset evidence.", "page_refs": [4]},
+                ],
+            },
+            {3, 4},
+            "Fallback",
+        )
+        self.assertEqual(len(report["blocks"]), 3)
 
     def test_truncated_english_output_continues_and_merges_complete_blocks(self) -> None:
         truncated = (
