@@ -8,6 +8,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from .config import apply_environment_settings
 from backend.llm import SummaryError, request_chat_completion
 
 
@@ -262,6 +263,7 @@ def chunk_page_documents(pages: list[dict[str, Any]], budget_tokens: int) -> lis
 def generate_english_report(
     title: str, page_texts: list[dict[str, Any]], settings: dict[str, str]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    settings = apply_environment_settings(settings)
     if settings.get("provider") != "openai_compatible":
         raise SummaryError("Detailed paper analysis requires an OpenAI-compatible model")
     plan = build_summary_input_plan(page_texts, settings)
@@ -324,6 +326,7 @@ def translate_report_blocks(
     settings: dict[str, str],
     source_pages: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    settings = apply_environment_settings(settings)
     if settings.get("provider") != "openai_compatible":
         raise SummaryError("Chinese report translation requires an OpenAI-compatible model")
     if not blocks:
@@ -379,10 +382,12 @@ def translate_report_blocks(
 
 
 def analysis_model(settings: dict[str, str]) -> str:
+    settings = apply_environment_settings(settings)
     return str(settings.get("analysis_model") or settings.get("model") or "gpt-4.1-mini").strip()
 
 
 def translation_model(settings: dict[str, str]) -> str:
+    settings = apply_environment_settings(settings)
     return str(settings.get("translation_model") or settings.get("model") or "gpt-4.1-mini").strip()
 
 
@@ -419,6 +424,7 @@ def normalize_report(
             block["level"] = 3 if level == 3 else 2
         blocks.append(block)
     _fill_heading_page_refs(blocks)
+    _validate_heading_content(blocks)
     if not any(block["type"] in {"paragraph", "bullet"} for block in blocks):
         raise SummaryError("LLM returned no page-grounded report content blocks")
     if any(not block["page_refs"] for block in blocks):
@@ -427,6 +433,20 @@ def normalize_report(
         "paper_title": str(data.get("paper_title", "")).strip() or fallback_title,
         "blocks": blocks,
     }
+
+
+def _validate_heading_content(blocks: list[dict[str, Any]]) -> None:
+    previous_heading: dict[str, Any] | None = None
+    for block in blocks:
+        if block["type"] == "heading":
+            if previous_heading is not None:
+                raise SummaryError(
+                    "Report contains consecutive headings without content blocks: "
+                    f"{previous_heading['text_en']} / {block['text_en']}"
+                )
+            previous_heading = block
+        elif block["type"] in {"paragraph", "bullet"}:
+            previous_heading = None
 
 
 def _request_report(
@@ -643,7 +663,8 @@ def _numeric_mismatch_details(
     for block, translation in zip(blocks, translations, strict=True):
         expected = NUMERIC_TOKEN_RE.findall(block["text_en"])
         actual = NUMERIC_TOKEN_RE.findall(translation["text_zh"])
-        if Counter(expected) != Counter(actual):
+        placeholders = NUMERIC_PLACEHOLDER_RE.findall(translation["text_zh"])
+        if Counter(expected) != Counter(actual) or placeholders:
             details.append({"id": block["id"], "expected": expected, "actual": actual})
     return details
 
@@ -1141,6 +1162,7 @@ def _is_report_validation_error(message: str) -> bool:
             "invalid json",
             "non-object json",
             "no page-grounded report content blocks",
+            "without content blocks",
             "without valid page references",
         )
     )

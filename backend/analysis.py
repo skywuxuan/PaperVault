@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .config import apply_environment_settings
 from .llm import SummaryError, request_structured_json
 
 
@@ -100,6 +101,7 @@ SECTION_SPECS = [
 
 
 def provider_available(settings: dict[str, str]) -> bool:
+    settings = apply_environment_settings(settings)
     return (
         settings.get("provider") == "openai_compatible"
         and bool(settings.get("base_url", "").strip())

@@ -102,6 +102,21 @@ class DeepSummaryStructureTestCase(unittest.TestCase):
         self.assertTrue(all(block["page_refs"] for block in report["blocks"]))
         self.assertEqual(report["blocks"][2]["level"], 3)
 
+    def test_report_rejects_empty_headings(self) -> None:
+        with self.assertRaisesRegex(SummaryError, "consecutive headings"):
+            normalize_report(
+                {
+                    "paper_title": "Original Title",
+                    "blocks": [
+                        {"type": "heading", "level": 2, "text_en": "Training", "page_refs": [3]},
+                        {"type": "heading", "level": 2, "text_en": "Datasets", "page_refs": [4]},
+                        {"type": "paragraph", "text_en": "Dataset evidence.", "page_refs": [4]},
+                    ],
+                },
+                {3, 4},
+                "Fallback",
+            )
+
     def test_truncated_english_output_continues_and_merges_complete_blocks(self) -> None:
         truncated = (
             '{"paper_title":"Original","blocks":['
@@ -364,6 +379,47 @@ class DeepSummaryTranslationTestCase(unittest.TestCase):
         self.assertIn("Copy every placeholder exactly once", correction_prompt)
         self.assertEqual(merged[0]["text_zh"], "评测结果")
         self.assertEqual(merged[1]["text_zh"], "WER 最终为 9.1%，起始为 12.5%。")
+
+    def test_translation_retries_numeric_placeholder_left_in_final_text(self) -> None:
+        initial = {
+            "translations": [
+                {"id": "heading-001", "text_zh": "评测结果"},
+                {
+                    "id": "paragraph-001",
+                    "text_zh": "截至[[PVNUM_A]]年[[PVNUM_B]]月2026，结果稳定。",
+                },
+            ]
+        }
+        corrected = {
+            "translations": [
+                {
+                    "id": "paragraph-001",
+                    "text_zh": "截至[[PVNUM_A]]年二月，结果稳定。",
+                }
+            ]
+        }
+        blocks = [
+            {
+                "id": "heading-001",
+                "type": "heading",
+                "level": 2,
+                "text_en": "Evaluation Results",
+                "page_refs": [4],
+            },
+            {
+                "id": "paragraph-001",
+                "type": "paragraph",
+                "text_en": "As of February 2026, results are stable.",
+                "page_refs": [4],
+            },
+        ]
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=[completion(initial), completion(corrected)],
+        ) as request:
+            merged, _ = translate_report_blocks(blocks, settings())
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(merged[1]["text_zh"], "截至2026年二月，结果稳定。")
 
     def test_numeric_retry_can_translate_sentence_segments_into_one_block(self) -> None:
         blocks = [

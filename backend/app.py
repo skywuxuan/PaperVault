@@ -30,6 +30,7 @@ from .analysis import (
     provider_available,
     representative_chunks,
 )
+from .config import DATA_DIR_ENV, load_local_environment
 from .database import Database, normalize_title_key, utc_now
 from .deep_summary import (
     DEEP_SUMMARY_PROMPT_VERSION,
@@ -1776,14 +1777,17 @@ def quote_filename(filename: str) -> str:
 
 
 def main() -> None:
+    project_dir = Path(__file__).resolve().parent.parent
+    load_local_environment(project_dir)
     parser = argparse.ArgumentParser(description="PaperVault local web server")
     parser.add_argument("--host", default=os.environ.get("PAPER_VAULT_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PAPER_VAULT_PORT", "8765")))
     parser.add_argument("--data-dir", type=Path, default=None)
     args = parser.parse_args()
 
-    project_dir = Path(__file__).resolve().parent.parent
-    data_dir = args.data_dir.resolve() if args.data_dir else project_dir / "data"
+    configured_data_dir = os.environ.get(DATA_DIR_ENV, "").strip()
+    selected_data_dir = args.data_dir or (Path(configured_data_dir) if configured_data_dir else None)
+    data_dir = selected_data_dir.expanduser().resolve() if selected_data_dir else project_dir / "data"
     server = PaperVaultServer((args.host, args.port), project_dir / "frontend", data_dir)
     print(f"PaperVault is running at http://{args.host}:{args.port}")
     print(f"Local data: {data_dir}")
