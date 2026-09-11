@@ -31,6 +31,7 @@ from .analysis import (
     representative_chunks,
 )
 from .database import Database, normalize_title_key, utc_now
+from .doubao import fetch_doubao_markdown, markdown_blocks, translate_markdown_to_english
 from .deep_summary import (
     DEEP_SUMMARY_PROMPT_VERSION,
     analysis_model,
@@ -68,6 +69,11 @@ TAG_ROUTE_RE = re.compile(r"^/api/tags/([0-9a-f-]+)$")
 VOCABULARY_ROUTE_RE = re.compile(r"^/api/vocabulary/([0-9a-f-]+)$")
 PAPER_ANNOTATIONS_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/annotations$")
 ANNOTATION_ROUTE_RE = re.compile(r"^/api/annotations/([0-9a-f-]+)$")
+PAPER_VARIANTS_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/summary-variants$")
+PAPER_NOTES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/notes$")
+VARIANT_TRANSLATION_RE = re.compile(r"^/api/summary-variants/([0-9a-f-]+)/translate-english$")
+NOTE_QUOTES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/notes/quotes$")
+NOTE_QUOTE_ROUTE_RE = re.compile(r"^/api/note-quotes/([0-9a-f-]+)$")
 VOCABULARY_STATUSES = {"learning", "mastered"}
 ANNOTATION_COLORS = {"yellow", "green", "blue", "coral"}
 
@@ -77,6 +83,7 @@ class PaperVaultServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], frontend_dir: Path, data_dir: Path):
         self.frontend_dir = frontend_dir.resolve()
+        self.project_dir = self.frontend_dir.parent
         self.data_dir = data_dir.resolve()
         self.upload_dir = self.data_dir / "uploads"
         self.asset_dir = self.data_dir / "assets"
@@ -90,6 +97,17 @@ class PaperVaultServer(ThreadingHTTPServer):
         self._job_wakeup = threading.Event()
         self._job_thread: threading.Thread | None = None
         super().__init__(address, PaperVaultHandler)
+
+    def local_config_values(self) -> dict[str, str]:
+        return load_local_config(self.project_dir)
+
+    def local_config_metadata(self) -> dict[str, Any]:
+        values = self.local_config_values()
+        return {
+            "available": bool(values),
+            "has_api_key": bool(values.get("api_key")),
+            "keys": sorted(key for key in values if key != "api_key"),
+        }
 
     def serve_forever(self, poll_interval: float = 0.5) -> None:
         try:
@@ -354,6 +372,20 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             annotations = self.server.db.list_annotations(match.group(1))
             self.send_json({"annotations": annotations})
             return
+        match = PAPER_VARIANTS_RE.match(path)
+        if match:
+            if self.server.db.get_paper(match.group(1)) is None:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            self.send_json({"variants": self.server.db.list_summary_variants(match.group(1))})
+            return
+        match = PAPER_NOTES_RE.match(path)
+        if match:
+            if self.server.db.get_paper(match.group(1)) is None:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            self.send_json({"note": self.server.db.get_or_create_note(match.group(1))})
+            return
         match = PAPER_ROUTE_RE.match(path)
         if match:
             paper = self.server.ensure_visual_assets(match.group(1))
@@ -366,7 +398,12 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             self.send_json({"tags": self.server.db.list_tags()})
             return
         if path == "/api/settings":
-            self.send_json({"settings": self.server.db.get_settings()})
+            self.send_json(
+                {
+                    "settings": self.server.db.get_settings(),
+                    "local_config": self.server.local_config_metadata(),
+                }
+            )
             return
         if path == "/api/vocabulary":
             entries = self.server.db.list_vocabulary_entries()
@@ -379,6 +416,9 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/settings/import-local":
+            self.import_local_settings()
+            return
         if path == "/api/papers":
             self.create_paper()
             return
@@ -400,6 +440,18 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         match = PAPER_SUMMARY_TRANSLATION_RE.match(path)
         if match:
             self.translate_paper_summary(match.group(1))
+            return
+        match = PAPER_VARIANTS_RE.match(path)
+        if match:
+            self.import_summary_variant(match.group(1))
+            return
+        match = NOTE_QUOTES_RE.match(path)
+        if match:
+            self.create_note_quote(match.group(1))
+            return
+        match = VARIANT_TRANSLATION_RE.match(path)
+        if match:
+            self.translate_summary_variant(match.group(1))
             return
         if path == "/api/tags":
             self.create_tag()
@@ -434,6 +486,10 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         if match:
             self.update_annotation(match.group(1))
             return
+        match = PAPER_NOTES_RE.match(path)
+        if match:
+            self.update_note(match.group(1))
+            return
         if path == "/api/settings":
             self.update_settings()
             return
@@ -466,6 +522,13 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             deleted = self.server.db.delete_annotation(match.group(1))
             if not deleted:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Annotation not found")
+                return
+            self.send_json({"deleted": True})
+            return
+        match = NOTE_QUOTE_ROUTE_RE.match(path)
+        if match:
+            if not self.server.db.delete_note_quote(match.group(1)):
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Note quote not found")
                 return
             self.send_json({"deleted": True})
             return
@@ -932,6 +995,95 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         )
         self.send_json({"annotation": annotation}, HTTPStatus.CREATED)
 
+    def import_summary_variant(self, paper_id: str) -> None:
+        if self.server.db.get_paper(paper_id) is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        try:
+            payload = self.read_json()
+            imported = fetch_doubao_markdown(str(payload.get("url", "")))
+        except (ValueError, SummaryError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        variant = self.server.db.create_summary_variant(
+            {
+                "id": str(uuid.uuid4()),
+                "paper_id": paper_id,
+                "provider": "doubao",
+                "source_url": imported["url"],
+                "title": imported["title"],
+                "content_markdown": imported["markdown"],
+                "content_blocks": markdown_blocks(imported["markdown"]),
+                "english_status": "pending",
+            }
+        )
+        self.send_json({"variant": variant, "phase": "chinese_complete"}, HTTPStatus.CREATED)
+
+    def translate_summary_variant(self, variant_id: str) -> None:
+        variant = self.server.db.get_summary_variant(variant_id)
+        if variant is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Summary variant not found")
+            return
+        self.server.db.update_summary_variant(
+            variant_id, {"english_status": "generating", "error": ""}
+        )
+        settings = self.server.db.get_settings(include_secret=True)
+        source_markdown = str(variant.get("content_markdown", ""))
+        try:
+            english = model = ""
+            last_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    english, model = translate_markdown_to_english(source_markdown, settings)
+                    last_error = None
+                    break
+                except (SummaryError, ValueError) as exc:
+                    last_error = exc
+                    if attempt >= 2 or not retryable_external_translation_error(str(exc)):
+                        raise
+                    time.sleep(2 ** attempt)
+            if last_error is not None:
+                raise last_error
+        except (SummaryError, ValueError) as exc:
+            message, error_code = friendly_model_error(str(exc))
+            self.server.db.update_summary_variant(variant_id, {"english_status": "error", "error": message})
+            self.send_json({"error": message, "error_code": error_code}, HTTPStatus.BAD_GATEWAY)
+            return
+        updated = self.server.db.update_summary_variant(
+            variant_id, {"english_markdown": english, "english_status": "ready", "model": model, "error": ""}
+        )
+        self.send_json({"variant": updated})
+
+    def create_note_quote(self, paper_id: str) -> None:
+        if self.server.db.get_paper(paper_id) is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        try:
+            payload = self.read_json()
+            quote_text = str(payload.get("quote_text", "")).strip()
+            if not quote_text:
+                raise ValueError("Quote text is required")
+            if len(quote_text) > 10000:
+                raise ValueError("Quote text is too long")
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        note = self.server.db.create_note_quote(paper_id, payload)
+        self.send_json({"note": note}, HTTPStatus.CREATED)
+
+    def update_note(self, paper_id: str) -> None:
+        if self.server.db.get_paper(paper_id) is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        try:
+            payload = self.read_json()
+            title = str(payload.get("title", "我的读书笔记"))
+            body = str(payload.get("body", ""))
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"note": self.server.db.update_note(paper_id, title, body)})
+
     def update_annotation(self, annotation_id: str) -> None:
         try:
             payload = self.read_json()
@@ -1250,6 +1402,20 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 )
                 return
         self.send_json({"settings": self.server.db.update_settings(payload)})
+
+    def import_local_settings(self) -> None:
+        values = self.server.local_config_values()
+        if not values:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "未找到可识别的 .env.local 配置")
+            return
+        settings = self.server.db.update_settings(values)
+        self.send_json(
+            {
+                "settings": settings,
+                "imported_keys": sorted(values),
+                "local_config": self.server.local_config_metadata(),
+            }
+        )
 
     def create_vocabulary_entry(self) -> None:
         try:
@@ -1646,6 +1812,11 @@ def friendly_model_error(message: str) -> tuple[str, str]:
             "模型没有返回可用的最终内容，自动重试后仍未成功。请稍后重试。",
             "model_empty_response",
         )
+    if "doubao english model returned empty content" in lowered:
+        return (
+            "模型返回了空的豆包英文解析，当前结果没有被覆盖。请重试。",
+            "model_empty_response",
+        )
     if "invalid json" in lowered or "non-object json" in lowered:
         return (
             "模型返回的 JSON 结构无效，当前结果没有被覆盖。请重试。",
@@ -1661,13 +1832,78 @@ def friendly_model_error(message: str) -> tuple[str, str]:
             "模型服务账户余额不足，当前摘要没有被覆盖。请充值或更换 API Key 后重试。",
             "insufficient_balance",
         )
-    if "(401)" in lowered or "unauthorized" in lowered or "invalid api key" in lowered:
-        return "API Key 无效或已过期，请在模型设置中更新后重试。", "invalid_api_key"
+    if "(401)" in lowered or "unauthorized" in lowered or "invalid api key" in lowered or "invalid token" in lowered:
+        return "API Key 缺失、无效或已过期，请在模型设置中导入配置并保存后重试。", "invalid_api_key"
     if "timed out" in lowered or "timeout" in lowered:
         return "模型响应超时，当前摘要没有被覆盖，请稍后重试。", "model_timeout"
     if "connection" in lowered or "urlopen" in lowered:
         return "无法连接模型服务，请检查 VPN、网络和 API 地址。", "model_unreachable"
     return "模型生成失败，当前摘要没有被覆盖。请检查模型设置后重试。", "model_error"
+
+
+def retryable_external_translation_error(message: str) -> bool:
+    """Retry only transient provider failures; never retry auth or payload errors."""
+    lowered = str(message or "").casefold()
+    return (
+        any(f"({status})" in lowered for status in (500, 502, 503, 504))
+        or "timed out" in lowered
+        or "timeout" in lowered
+        or "urlopen error" in lowered
+        or "connection" in lowered
+    )
+
+
+LOCAL_CONFIG_KEYS = {
+    "provider": "provider",
+    "paper_vault_provider": "provider",
+    "base_url": "base_url",
+    "paper_vault_base_url": "base_url",
+    "model": "model",
+    "paper_vault_model": "model",
+    "analysis_model": "analysis_model",
+    "paper_vault_analysis_model": "analysis_model",
+    "translation_model": "translation_model",
+    "paper_vault_translation_model": "translation_model",
+    "context_window_tokens": "context_window_tokens",
+    "paper_vault_context_window_tokens": "context_window_tokens",
+    "analysis_reasoning_effort": "analysis_reasoning_effort",
+    "paper_vault_analysis_reasoning_effort": "analysis_reasoning_effort",
+    "api_key": "api_key",
+    "paper_vault_api_key": "api_key",
+}
+
+
+def load_local_config(project_dir: Path) -> dict[str, str]:
+    path = (project_dir / ".env.local").resolve()
+    if not path.is_file() or path.stat().st_size > 256 * 1024:
+        return {}
+    try:
+        source = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        return {}
+    values: dict[str, str] = {}
+    for line in source.splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned.startswith("#"):
+            continue
+        cleaned = re.sub(r"^export\s+", "", cleaned)
+        if "=" not in cleaned:
+            continue
+        raw_key, raw_value = cleaned.split("=", 1)
+        setting_key = LOCAL_CONFIG_KEYS.get(raw_key.strip().casefold())
+        if not setting_key:
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if setting_key == "api_key" and not value:
+            continue
+        values[setting_key] = value
+    if not values:
+        return {}
+    if not values.get("provider") and any(values.get(key) for key in ("base_url", "model", "api_key")):
+        values["provider"] = "openai_compatible"
+    return values
 
 
 def parse_tag_ids(value: Any) -> list[str]:

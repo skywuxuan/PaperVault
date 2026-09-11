@@ -146,16 +146,17 @@
       </div>
       <div class="reader-actions">
         <button id="regenerateButton" class="secondary-button" type="button"><span aria-hidden="true">&#8635;</span> 生成摘要</button>
+        <button id="doubaoImportButton" class="secondary-button" type="button"><span aria-hidden="true">✦</span> 豆包解析</button>
+        <button id="notesButton" class="secondary-button notes-launch-button" type="button"><span aria-hidden="true">✎</span> 我的笔记</button>
         <button id="editPaperButton" class="secondary-button" type="button"><span aria-hidden="true">&#9998;</span> 编辑</button>
         <a id="openPdfButton" class="icon-button" href="#" target="_blank" rel="noopener" title="新窗口打开 PDF" aria-label="新窗口打开 PDF">&#8599;</a>
         <button id="deletePaperButton" class="icon-button danger-icon" type="button" title="删除论文" aria-label="删除论文">&#10005;</button>
       </div>
     </div>
     <nav class="reader-modebar" aria-label="阅读模式">
-      <div class="reader-mode-tabs" role="tablist" aria-label="论文阅读模式">
-        <button class="active" type="button" role="tab" aria-selected="true" data-reader-mode="deep"><span aria-hidden="true">文</span> 双语深读</button>
-        <button type="button" role="tab" aria-selected="false" data-reader-mode="notes"><span aria-hidden="true">✎</span> 笔记</button>
-      </div>
+        <div class="reader-mode-tabs" role="tablist" aria-label="论文阅读模式">
+          <button class="active" type="button" role="tab" aria-selected="true" data-reader-mode="deep"><span aria-hidden="true">文</span> 双语深读</button>
+        </div>
       <span id="readerTaskSummary" class="reader-task-summary">阅读器就绪</span>
     </nav>
     <div id="readerGrid" class="reader-grid">
@@ -187,6 +188,10 @@
         <div class="panel-header">
           <div><span class="panel-index english-index">02</span><h2 id="englishHeading">English Summary</h2></div>
           <div class="panel-header-actions">
+            <div class="summary-source-switch" role="group" aria-label="摘要来源">
+              <button type="button" class="active" data-summary-source="native">系统解析</button>
+              <button type="button" data-summary-source="doubao">豆包解析</button>
+            </div>
             <span id="summaryStatus" class="status-pill"></span>
             <button class="panel-collapse-button" type="button" data-collapse-panel="english" title="折叠英文摘要" aria-label="折叠英文摘要" aria-expanded="true">−</button>
           </div>
@@ -464,8 +469,10 @@
   <div id="pdfSelectionToolbar" class="pdf-selection-toolbar" role="toolbar" aria-label="PDF 选区工具" hidden>
     <button id="highlightSelectionButton" type="button"><span class="highlight-tool-swatch" aria-hidden="true"></span> 高亮</button>
     <button id="noteSelectionButton" type="button"><span aria-hidden="true">✎</span> 批注</button>
+    <button id="quoteSelectionButton" type="button"><span aria-hidden="true">❝</span> 引用到笔记</button>
     <button id="removeSelectionHighlightButton" class="remove-highlight-tool" type="button" hidden><span aria-hidden="true">×</span> 取消高亮</button>
   </div>
+  <div id="summarySelectionToolbar" class="summary-selection-toolbar" role="toolbar" aria-label="摘要选区工具" hidden><button id="quoteSummarySelectionButton" type="button">❝ 引用到笔记</button></div>
   <div id="pdfAnnotationPopover" class="pdf-annotation-popover" role="dialog" aria-label="PDF 批注" hidden>
     <button id="closeAnnotationPopover" class="pdf-annotation-close" type="button" aria-label="关闭" title="关闭">&times;</button>
     <strong class="pdf-annotation-title">高亮批注</strong>
@@ -482,6 +489,36 @@
       <button id="saveAnnotationButton" class="primary-button" type="button">保存</button>
     </div>
   </div>
+  <dialog id="doubaoImportDialog" class="modal medium-modal">
+    <form id="doubaoImportForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">EXTERNAL REPORT</p><h2>导入豆包解析</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="doubaoImportDialog" aria-label="关闭" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="external-import-intro">粘贴豆包公开分享链接。中文原文会完整保留，英文版随后由当前模型生成。</p>
+        <label class="field field-wide"><span>豆包分享链接</span><input name="url" type="url" required placeholder="https://www.doubao.com/thread/..." autocomplete="off"></label>
+        <label class="import-preview-toggle"><input name="generate_english" type="checkbox" checked><span>同时生成英文版</span></label>
+        <p class="external-import-hint">支持标题、列表、表格、粗体和 LaTeX 公式；不要求 PDF 页码映射。</p>
+        <div id="doubaoImportProgress" class="doubao-import-progress" aria-live="polite" hidden>
+          <div class="doubao-progress-step" data-import-step="fetch"><span>1</span><div><strong>读取分享页</strong><small>连接豆包并提取原始 Markdown</small></div></div>
+          <div class="doubao-progress-step" data-import-step="parse"><span>2</span><div><strong>保存中文解析</strong><small>保留章节、表格和公式结构</small></div></div>
+          <div class="doubao-progress-step" data-import-step="translate"><span>3</span><div><strong>生成英文版</strong><small>中文保存后将在阅读器中继续</small></div></div>
+          <p id="doubaoImportProgressText">准备导入</p>
+        </div>
+      </div>
+      <div class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="doubaoImportDialog">取消</button><button id="doubaoImportSubmit" class="primary-button" type="submit">导入解析</button></div>
+    </form>
+  </dialog>
+  <aside id="notesDrawer" class="notes-drawer" aria-label="我的笔记" hidden>
+    <div class="notes-drawer-header"><div><p class="eyebrow">RESEARCH NOTES</p><h2>我的笔记</h2></div><button id="closeNotesButton" class="icon-button" type="button" aria-label="关闭笔记" title="关闭">&times;</button></div>
+    <div class="notes-drawer-body">
+      <label class="note-title-field"><span>标题</span><input id="noteTitleInput" type="text" maxlength="200" value="我的读书笔记"></label>
+      <textarea id="noteBodyInput" class="note-body-input" maxlength="100000" placeholder="写下你的理解、疑问和下一步……"></textarea>
+      <div class="notes-drawer-toolbar"><span id="noteSaveState">自动保存</span><button id="addNoteQuoteButton" class="secondary-button" type="button">＋ 添加引用</button></div>
+      <div id="noteQuotesList" class="note-quotes-list"></div>
+    </div>
+  </aside>
   <div id="toastRegion" class="toast-region" aria-live="polite"></div>
 
   <script src="/app.js" defer></script>

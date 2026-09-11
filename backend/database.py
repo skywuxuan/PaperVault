@@ -115,6 +115,45 @@ CREATE TABLE IF NOT EXISTS paper_annotations (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS summary_variants (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    content_markdown TEXT NOT NULL DEFAULT '',
+    content_blocks TEXT NOT NULL DEFAULT '[]',
+    english_markdown TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready', 'error')),
+    english_status TEXT NOT NULL DEFAULT 'pending' CHECK(english_status IN ('pending', 'generating', 'ready', 'error')),
+    model TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_notes (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL UNIQUE REFERENCES papers(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT '我的读书笔记',
+    body TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS note_quotes (
+    id TEXT PRIMARY KEY,
+    note_id TEXT NOT NULL REFERENCES paper_notes(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL,
+    source_variant_id TEXT NOT NULL DEFAULT '',
+    source_locator TEXT NOT NULL DEFAULT '{}',
+    quote_text TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS analysis_runs (
     id TEXT PRIMARY KEY,
     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -170,6 +209,8 @@ CREATE INDEX IF NOT EXISTS idx_paper_tags_tag_id ON paper_tags(tag_id);
 CREATE INDEX IF NOT EXISTS idx_vocabulary_updated_at ON vocabulary_entries(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vocabulary_status ON vocabulary_entries(status);
 CREATE INDEX IF NOT EXISTS idx_annotations_paper_page ON paper_annotations(paper_id, page);
+CREATE INDEX IF NOT EXISTS idx_summary_variants_paper ON summary_variants(paper_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_note_quotes_note ON note_quotes(note_id, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_paper_type ON analysis_runs(paper_id, analysis_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_created ON analysis_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_analysis_jobs_paper_type ON analysis_jobs(paper_id, job_type, updated_at DESC);
@@ -221,7 +262,7 @@ class Database:
     def initialize(self) -> None:
         with self.connect() as connection:
             existing_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if existing_version > SCHEMA_VERSION:
+            if existing_version > SCHEMA_VERSION and existing_version != 5:
                 raise RuntimeError(
                     f"Database schema version {existing_version} is newer than supported version {SCHEMA_VERSION}"
                 )
@@ -297,11 +338,12 @@ class Database:
                 )
             except sqlite3.OperationalError:
                 pass
+            schema_version = max(SCHEMA_VERSION, existing_version)
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                (SCHEMA_VERSION, utc_now()),
+                (schema_version, utc_now()),
             )
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            connection.execute(f"PRAGMA user_version = {schema_version}")
             connection.execute(
                 """
                 UPDATE analysis_jobs
@@ -319,6 +361,16 @@ class Database:
                 WHERE status = 'running' AND attempts >= max_attempts
                 """,
                 (utc_now(), utc_now()),
+            )
+            connection.execute(
+                """
+                UPDATE summary_variants
+                SET english_status = 'error',
+                    error = '英文版生成在上次服务退出时中断，请重新生成。',
+                    updated_at = ?
+                WHERE english_status = 'generating'
+                """,
+                (utc_now(),),
             )
             from .pdf_parser import infer_publication_year
             for row in connection.execute(
@@ -493,7 +545,7 @@ class Database:
                 """,
                 params,
             ).fetchall()
-            papers = [self._paper_dict(connection, row) for row in rows]
+            papers = [self._paper_dict(connection, row, include_variants=False) for row in rows]
         return papers
 
     def library_facets(self) -> dict[str, Any]:
@@ -665,7 +717,7 @@ class Database:
             rows = connection.execute(
                 "SELECT * FROM papers WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
             ).fetchall()
-            return [self._paper_dict(connection, row) for row in rows]
+            return [self._paper_dict(connection, row, include_variants=False) for row in rows]
 
     def restore_paper(self, paper_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
@@ -994,6 +1046,152 @@ class Database:
             )
         return cursor.rowcount > 0
 
+    def list_summary_variants(self, paper_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM summary_variants WHERE paper_id = ? ORDER BY updated_at DESC, created_at DESC",
+                (paper_id,),
+            ).fetchall()
+        variants = []
+        for row in rows:
+            item = dict(row)
+            if item.get("provider") == "doubao":
+                from .doubao import normalize_markdown
+
+                item["content_markdown"] = normalize_markdown(item.get("content_markdown", ""))
+            try:
+                item["content_blocks"] = json.loads(item.get("content_blocks") or "[]")
+            except json.JSONDecodeError:
+                item["content_blocks"] = []
+            variants.append(item)
+        return variants
+
+    def get_summary_variant(self, variant_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM summary_variants WHERE id = ?", (variant_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        if item.get("provider") == "doubao":
+            from .doubao import normalize_markdown
+
+            item["content_markdown"] = normalize_markdown(item.get("content_markdown", ""))
+        try:
+            item["content_blocks"] = json.loads(item.get("content_blocks") or "[]")
+        except json.JSONDecodeError:
+            item["content_blocks"] = []
+        return item
+
+    def create_summary_variant(self, variant: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO summary_variants(
+                    id, paper_id, provider, source_url, title, content_markdown,
+                    content_blocks, english_markdown, status, english_status, model,
+                    error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    variant["id"], variant["paper_id"], variant.get("provider", "doubao"),
+                    variant.get("source_url", ""), variant.get("title", ""),
+                    variant.get("content_markdown", ""),
+                    json.dumps(variant.get("content_blocks", []), ensure_ascii=False),
+                    variant.get("english_markdown", ""), variant.get("status", "ready"),
+                    variant.get("english_status", "pending"), variant.get("model", ""),
+                    variant.get("error", ""), now, now,
+                ),
+            )
+        result = self.get_summary_variant(variant["id"])
+        assert result is not None
+        return result
+
+    def update_summary_variant(self, variant_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        allowed = {"title", "content_markdown", "content_blocks", "english_markdown", "status", "english_status", "model", "error"}
+        updates: list[str] = []
+        values: list[Any] = []
+        for key, value in fields.items():
+            if key not in allowed:
+                continue
+            updates.append(f"{key} = ?")
+            values.append(json.dumps(value, ensure_ascii=False) if key == "content_blocks" else value)
+        if not updates:
+            return self.get_summary_variant(variant_id)
+        updates.append("updated_at = ?")
+        values.extend((utc_now(), variant_id))
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"UPDATE summary_variants SET {', '.join(updates)} WHERE id = ?", values
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_summary_variant(variant_id)
+
+    def get_or_create_note(self, paper_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM paper_notes WHERE paper_id = ?", (paper_id,)).fetchone()
+            if row is None:
+                note_id = str(__import__("uuid").uuid4())
+                now = utc_now()
+                connection.execute(
+                    "INSERT INTO paper_notes(id, paper_id, title, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (note_id, paper_id, "我的读书笔记", "", now, now),
+                )
+                row = connection.execute("SELECT * FROM paper_notes WHERE id = ?", (note_id,)).fetchone()
+            note = dict(row)
+            quotes = connection.execute(
+                "SELECT * FROM note_quotes WHERE note_id = ? ORDER BY sort_order, created_at", (note["id"],)
+            ).fetchall()
+        note["quotes"] = [dict(quote) for quote in quotes]
+        for quote in note["quotes"]:
+            try:
+                quote["source_locator"] = json.loads(quote.get("source_locator") or "{}")
+            except json.JSONDecodeError:
+                quote["source_locator"] = {}
+        return note
+
+    def update_note(self, paper_id: str, title: str, body: str) -> dict[str, Any]:
+        note = self.get_or_create_note(paper_id)
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE paper_notes SET title = ?, body = ?, updated_at = ? WHERE id = ?",
+                (title[:200] or "我的读书笔记", body[:100000], utc_now(), note["id"]),
+            )
+        return self.get_or_create_note(paper_id)
+
+    def create_note_quote(self, paper_id: str, quote: dict[str, Any]) -> dict[str, Any]:
+        note = self.get_or_create_note(paper_id)
+        quote_id = quote.get("id") or str(__import__("uuid").uuid4())
+        now = utc_now()
+        with self.connect() as connection:
+            max_order = connection.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM note_quotes WHERE note_id = ?", (note["id"],)
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO note_quotes(
+                    id, note_id, source_type, source_variant_id, source_locator,
+                    quote_text, comment, sort_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    quote_id, note["id"], str(quote.get("source_type", "manual"))[:40],
+                    str(quote.get("source_variant_id", ""))[:100],
+                    json.dumps(quote.get("source_locator", {}), ensure_ascii=False),
+                    str(quote.get("quote_text", "")).strip()[:10000],
+                    str(quote.get("comment", "")).strip()[:10000], int(max_order) + 1, now, now,
+                ),
+            )
+        return self.get_or_create_note(paper_id)
+
+    def delete_note_quote(self, quote_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute("DELETE FROM note_quotes WHERE id = ?", (quote_id,))
+        return cursor.rowcount > 0
+
     def list_vocabulary_entries(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -1176,6 +1374,7 @@ class Database:
         connection: sqlite3.Connection,
         row: sqlite3.Row,
         include_text: bool = False,
+        include_variants: bool = True,
     ) -> dict[str, Any]:
         data = dict(row)
         for json_field in ("summary_pairs", "summary_blocks", "visual_assets"):
@@ -1194,6 +1393,35 @@ class Database:
             (row["id"],),
         ).fetchall()
         data["tags"] = [dict(tag) for tag in tags]
+        if include_variants:
+            variants = connection.execute(
+                "SELECT * FROM summary_variants WHERE paper_id = ? ORDER BY updated_at DESC, created_at DESC",
+                (row["id"],),
+            ).fetchall()
+            data["summary_variants"] = []
+            for variant_row in variants:
+                variant = dict(variant_row)
+                if variant.get("provider") == "doubao":
+                    from .doubao import normalize_markdown
+
+                    variant["content_markdown"] = normalize_markdown(variant.get("content_markdown", ""))
+                try:
+                    variant["content_blocks"] = json.loads(variant.get("content_blocks") or "[]")
+                except json.JSONDecodeError:
+                    variant["content_blocks"] = []
+                data["summary_variants"].append(variant)
+        else:
+            data["summary_variants"] = [
+                {
+                    key: variant[key]
+                    for key in ("id", "paper_id", "provider", "source_url", "title", "status", "english_status", "model", "error", "created_at", "updated_at")
+                    if key in variant.keys()
+                }
+                for variant in connection.execute(
+                    "SELECT * FROM summary_variants WHERE paper_id = ? ORDER BY updated_at DESC, created_at DESC",
+                    (row["id"],),
+                ).fetchall()
+            ]
         job_rows = connection.execute(
             """
             SELECT * FROM analysis_jobs

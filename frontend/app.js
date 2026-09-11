@@ -7,6 +7,7 @@ const state = {
   papers: [],
   tags: [],
   settings: {},
+  localConfig: { available: false, has_api_key: false, keys: [] },
   query: "",
   tagId: "",
   summaryFilter: "all",
@@ -17,6 +18,10 @@ const state = {
   summaryRetryIds: new Set(),
   batchRunning: false,
   currentPaper: null,
+  activeSummarySource: "native",
+  note: null,
+  noteSaveTimer: null,
+  summarySelection: null,
   readerMode: "deep",
   analysisRuns: [],
   analysisJobs: [],
@@ -218,6 +223,7 @@ async function loadTags() {
 async function loadSettings() {
   const data = await api("/api/settings");
   state.settings = data.settings;
+  state.localConfig = data.local_config || { available: false, has_api_key: false, keys: [] };
   updateProviderHint();
 }
 
@@ -1614,15 +1620,453 @@ function renderReader() {
   translateButton.title = paper.summary_status === "translation_error"
     ? "仅重新翻译中文，不重新运行英文分析"
     : "生成中文翻译";
-  renderSummaries(
-    paper.summary_pairs || [],
-    paper.summary_error || paper.summary_translation_error,
-    paper.visual_assets || [],
-    paper.id,
-    paper.summary_blocks || [],
-  );
+  renderSummarySourceControls();
+  renderActiveSummarySource();
+  loadPaperNote(paper.id).catch(handleError);
   renderNotesPanel();
   setReaderMode(state.readerMode);
+}
+
+function renderSummarySourceControls() {
+  const variants = state.currentPaper?.summary_variants || [];
+  const hasDoubao = variants.some((variant) => variant.provider === "doubao");
+  if (!hasDoubao && state.activeSummarySource === "doubao") state.activeSummarySource = "native";
+  $$('[data-summary-source]').forEach((button) => {
+    button.hidden = button.dataset.summarySource === "doubao" && !hasDoubao;
+    button.classList.toggle("active", button.dataset.summarySource === state.activeSummarySource);
+  });
+}
+
+function currentDoubaoVariant() {
+  return (state.currentPaper?.summary_variants || []).find((variant) => variant.provider === "doubao") || null;
+}
+
+function renderActiveSummarySource() {
+  const variant = currentDoubaoVariant();
+  if (state.activeSummarySource !== "doubao" || !variant) {
+    const paper = state.currentPaper;
+    renderSummaries(
+      paper?.summary_pairs || [],
+      paper?.summary_error || paper?.summary_translation_error,
+      paper?.visual_assets || [],
+      paper?.id || "",
+      paper?.summary_blocks || [],
+    );
+    if (paper) {
+      const status = $("#summaryStatus");
+      status.className = `status-pill ${paper.summary_status || "pending"}`;
+      status.textContent = summarySource(paper);
+      status.title = paper.summary_provider === "openai_compatible"
+        ? `英文分析：${paper.summary_analysis_model || paper.summary_model || "未记录"}；中文翻译：${paper.summary_translation_model || "未记录"}`
+        : `摘要来源：${summarySource(paper)}（未调用外部模型）`;
+      const usesBlocks = Boolean(paper.summary_blocks?.length);
+      $("#termLinkLabel b").textContent = usesBlocks ? "段落联动" : "句对联动";
+      $("#termLinkLabel").title = usesBlocks
+        ? "单击任一侧段落可将对应译文对齐到相同高度"
+        : "单击任一侧句子可同步显示对应句";
+    }
+    return;
+  }
+  renderExternalSummary(variant);
+}
+
+function renderExternalSummary(variant) {
+  const english = $("#englishSummary");
+  const chinese = $("#chineseSummary");
+  english.replaceChildren();
+  chinese.replaceChildren();
+  renderExternalMarkdown(chinese, variant.content_markdown || "", "zh-CN", variant.title || "");
+  if (variant.english_status === "ready" && variant.english_markdown) {
+    renderExternalMarkdown(english, variant.english_markdown, "en", variant.title || "");
+  } else {
+    const messages = {
+      pending: "中文解析已保存，可随时生成英文版。",
+      generating: "正在保持原有章节结构生成英文版…",
+      error: `英文版生成失败：${externalVariantError(variant)}`,
+    };
+    const empty = make("div", `summary-empty external-generation-state ${variant.english_status}`, messages[variant.english_status] || messages.pending);
+    if (variant.english_status === "generating") {
+      empty.prepend(make("span", "mini-spinner"));
+    }
+    if (["pending", "error"].includes(variant.english_status)) {
+      const retry = make("button", "primary-button", variant.english_status === "pending" ? "生成英文版" : "重新生成英文");
+      retry.type = "button";
+      retry.addEventListener("click", () => retryExternalEnglish(variant.id));
+      const settings = make("button", "secondary-button", "打开模型设置");
+      settings.type = "button";
+      settings.addEventListener("click", showSettingsDialog);
+      const actions = make("div", "external-error-actions");
+      actions.append(retry, settings);
+      empty.append(document.createElement("br"), actions);
+    }
+    english.append(empty);
+  }
+  const statusLabels = { ready: "豆包 · 双语", generating: "豆包 · 英文生成中", pending: "豆包 · 中文已保存", error: "豆包 · 英文失败" };
+  $("#summaryStatus").textContent = statusLabels[variant.english_status] || "豆包解析";
+  $("#summaryStatus").className = `status-pill ${variant.english_status === "generating" ? "translating" : variant.english_status === "error" ? "error" : "ready"}`;
+  $("#termLinkLabel b").textContent = "外部解析";
+}
+
+function externalVariantError(variant) {
+  const error = String(variant?.error || "请重试");
+  return /\(401\)|invalid token|unauthorized|invalid api key/i.test(error)
+    ? "API Key 缺失、无效或已过期，请在模型设置中导入配置并保存后重试。"
+    : error;
+}
+
+async function retryExternalEnglish(variantId) {
+  const variant = currentDoubaoVariant();
+  if (!variant || variant.id !== variantId) return;
+  variant.english_status = "generating";
+  renderExternalSummary(variant);
+  try {
+    const result = await api(`/api/summary-variants/${variantId}/translate-english`, { method: "POST" });
+    state.currentPaper.summary_variants = (state.currentPaper.summary_variants || []).map((item) => item.id === variantId ? result.variant : item);
+    renderExternalSummary(result.variant);
+    toast("豆包英文版已生成");
+  } catch (error) {
+    variant.english_status = "error";
+    variant.error = error.message || "英文版生成失败";
+    renderExternalSummary(variant);
+    handleError(error);
+  }
+}
+
+function renderExternalMarkdown(container, markdown, language, reportTitle = "") {
+  const heading = make("header", "markdown-document-heading");
+  heading.append(make("p", "markdown-document-kicker", "DOUBAO REPORT"), make("h1", "markdown-document-title", language === "zh-CN" ? "豆包论文解析" : "Doubao Paper Report"));
+  if (reportTitle || state.currentPaper?.title) heading.append(make("p", "markdown-document-subtitle", reportTitle || state.currentPaper.title));
+  container.append(heading);
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  let list = null;
+  let blockIndex = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) { list = null; continue; }
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      list = null;
+      if (index === 0 && headingMatch[1].length === 1) continue;
+      const node = make(`h${Math.min(4, headingMatch[1].length)}`, "structured-heading");
+      appendExternalInline(node, headingMatch[2]);
+      decorateExternalBlock(node, blockIndex, language);
+      blockIndex += 1;
+      container.append(node);
+      continue;
+    }
+    const listMatch = line.match(/^\s*(?:[-*+] |\d+[.)] )(.*)$/);
+    if (listMatch) { if (!list) { list = make("ul", "structured-bullet-list"); container.append(list); } const item = make("li", "structured-bullet"); appendExternalInline(item, listMatch[1]); decorateExternalBlock(item, blockIndex, language); blockIndex += 1; list.append(item); continue; }
+    if (line.trimStart().startsWith(">")) { list = null; const quote = make("blockquote", "external-quote"); appendExternalInline(quote, line.trimStart().slice(1).trim()); decorateExternalBlock(quote, blockIndex, language); blockIndex += 1; container.append(quote); continue; }
+    if (line.includes("|") && lines[index + 1] && /^\s*\|?\s*:?-{3,}/.test(lines[index + 1])) {
+      list = null;
+      const tableLines = [line];
+      index += 1;
+      while (index + 1 < lines.length && lines[index + 1].includes("|") && lines[index + 1].trim()) {
+        index += 1;
+        tableLines.push(lines[index]);
+      }
+      const table = renderExternalTable(tableLines);
+      decorateExternalBlock(table, blockIndex, language);
+      blockIndex += 1;
+      container.append(table);
+      continue;
+    }
+    list = null; const paragraph = make("p", "structured-paragraph"); appendExternalInline(paragraph, line.trim()); decorateExternalBlock(paragraph, blockIndex, language); blockIndex += 1; container.append(paragraph);
+  }
+}
+
+function decorateExternalBlock(node, blockIndex, language) {
+  node.classList.add("external-mapped-block");
+  node.dataset.externalBlock = String(blockIndex);
+  node.dataset.language = language === "en" ? "en" : "zh";
+  node.tabIndex = 0;
+  node.addEventListener("click", (event) => {
+    if (window.getSelection()?.toString().trim()) return;
+    activateExternalBlock(blockIndex, node.dataset.language);
+    if (node.dataset.language === "en") activateExternalTerm(blockIndex, node, event);
+  });
+  node.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    activateExternalBlock(blockIndex, node.dataset.language);
+  });
+}
+
+function activateExternalTerm(blockIndex, node, event) {
+  const counterpart = $(`.external-mapped-block[data-language="zh"][data-external-block="${blockIndex}"]`);
+  showEnglishTermAtEvent(
+    event,
+    node.textContent || "",
+    counterpart?.textContent || "",
+    null,
+  );
+}
+
+function activateExternalBlock(blockIndex, sourceLanguage) {
+  $$(".external-mapped-block").forEach((node) => {
+    node.classList.toggle("active", Number(node.dataset.externalBlock) === Number(blockIndex));
+  });
+  const targetLanguage = sourceLanguage === "en" ? "zh" : "en";
+  const source = $(`.external-mapped-block[data-language="${sourceLanguage}"][data-external-block="${blockIndex}"]`);
+  const target = $(`.external-mapped-block[data-language="${targetLanguage}"][data-external-block="${blockIndex}"]`);
+  const targetScroller = target?.closest(".summary-content");
+  if (source && target && targetScroller) {
+    const delta = target.getBoundingClientRect().top - source.getBoundingClientRect().top;
+    targetScroller.scrollTo({ top: targetScroller.scrollTop + delta, behavior: "smooth" });
+    $("#termLinkLabel b").textContent = `段落 ${String(blockIndex + 1).padStart(2, "0")} 已对齐`;
+  }
+}
+
+function appendExternalInline(container, text) {
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let cursor = 0;
+  for (const match of String(text || "").matchAll(pattern)) {
+    if (match.index > cursor) appendSummaryText(container, String(text).slice(cursor, match.index));
+    const token = match[0];
+    if (token.startsWith("**")) {
+      const strong = make("strong", "external-strong");
+      appendSummaryText(strong, token.slice(2, -2));
+      container.append(strong);
+    } else {
+      container.append(make("code", "external-code", token.slice(1, -1)));
+    }
+    cursor = match.index + token.length;
+  }
+  if (cursor < String(text || "").length) appendSummaryText(container, String(text).slice(cursor));
+}
+
+function renderExternalTable(lines) {
+  const table = make("table", "external-table");
+  const rows = lines.filter((line) => !/^\s*\|?\s*:?-{3,}/.test(line)).map((line) => line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()));
+  if (!rows.length) return table;
+  const head = make("thead");
+  const headRow = make("tr");
+  rows[0].forEach((cell) => { const th = make("th"); appendExternalInline(th, cell); headRow.append(th); });
+  head.append(headRow);
+  const body = make("tbody");
+  rows.slice(1).forEach((row) => { const tr = make("tr"); row.forEach((cell) => { const td = make("td"); appendExternalInline(td, cell); tr.append(td); }); body.append(tr); });
+  table.append(head, body);
+  return table;
+}
+
+function showDoubaoImportDialog() {
+  const form = $("#doubaoImportForm");
+  form.elements.url.disabled = false;
+  form.elements.generate_english.disabled = false;
+  $("#doubaoImportSubmit").disabled = false;
+  $("#doubaoImportSubmit").textContent = "导入解析";
+  $("#doubaoImportProgress").hidden = true;
+  $$('[data-close-dialog="doubaoImportDialog"]').forEach((button) => { button.disabled = false; });
+  openDialog("doubaoImportDialog");
+}
+
+function setDoubaoImportProgress(step, message) {
+  const order = ["fetch", "parse", "translate"];
+  const activeIndex = order.indexOf(step);
+  $("#doubaoImportProgress").hidden = false;
+  $$('[data-import-step]').forEach((node) => {
+    const index = order.indexOf(node.dataset.importStep);
+    node.classList.toggle("complete", index < activeIndex);
+    node.classList.toggle("active", index === activeIndex);
+  });
+  $("#doubaoImportProgressText").textContent = message;
+}
+
+function setDoubaoImportLocked(locked) {
+  const form = $("#doubaoImportForm");
+  form.elements.url.disabled = locked;
+  form.elements.generate_english.disabled = locked;
+  $("#doubaoImportSubmit").disabled = locked;
+  $$('[data-close-dialog="doubaoImportDialog"]').forEach((button) => { button.disabled = locked; });
+}
+
+async function importDoubaoSummary(event) {
+  event.preventDefault();
+  if (!state.currentPaper) return;
+  const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+  const generateEnglish = event.currentTarget.elements.generate_english.checked;
+  payload.generate_english = false;
+  setDoubaoImportLocked(true);
+  $("#doubaoImportSubmit").textContent = "正在导入…";
+  setDoubaoImportProgress("fetch", "正在连接豆包分享页，请稍候…");
+  const slowHint = window.setTimeout(() => {
+    $("#doubaoImportProgressText").textContent = "分享页响应较慢，仍在提取原始 Markdown…";
+  }, 4500);
+  try {
+    const result = await api(`/api/papers/${state.currentPaper.id}/summary-variants`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    window.clearTimeout(slowHint);
+    setDoubaoImportProgress("parse", "中文解析已提取，正在写入本地论文库…");
+    state.currentPaper.summary_variants = [result.variant, ...(state.currentPaper.summary_variants || []).filter((item) => item.id !== result.variant.id)];
+    state.activeSummarySource = "doubao";
+    renderSummarySourceControls();
+    renderActiveSummarySource();
+    if (!generateEnglish) {
+      closeDialog("doubaoImportDialog");
+      toast("豆包中文解析已导入");
+      return;
+    }
+    setDoubaoImportProgress("translate", "中文解析已可阅读，英文版将在阅读器中继续生成。你可以继续浏览。 ");
+    result.variant.english_status = "generating";
+    renderActiveSummarySource();
+    closeDialog("doubaoImportDialog");
+    toast("中文解析已导入，正在生成英文版");
+    await retryExternalEnglish(result.variant.id);
+  } catch (error) {
+    window.clearTimeout(slowHint);
+    setDoubaoImportProgress("fetch", error.message || "导入失败，请检查链接后重试");
+    handleError(error);
+  } finally {
+    setDoubaoImportLocked(false);
+    $("#doubaoImportSubmit").textContent = "导入解析";
+  }
+}
+
+async function loadPaperNote(paperId) {
+  const data = await api(`/api/papers/${paperId}/notes`);
+  if (state.currentPaper?.id !== paperId) return;
+  state.note = data.note;
+  renderNoteDrawer();
+}
+
+function openNotesDrawer() {
+  if (!state.currentPaper) return;
+  $("#notesDrawer").hidden = false;
+  document.body.classList.add("notes-drawer-open");
+  if (!state.note) loadPaperNote(state.currentPaper.id).catch(handleError);
+  window.setTimeout(() => $("#noteBodyInput")?.focus(), 0);
+}
+
+function closeNotesDrawer() {
+  $("#notesDrawer").hidden = true;
+  document.body.classList.remove("notes-drawer-open");
+}
+
+function renderNoteDrawer() {
+  if (!state.note) return;
+  $("#noteTitleInput").value = state.note.title || "我的读书笔记";
+  $("#noteBodyInput").value = state.note.body || "";
+  const list = $("#noteQuotesList");
+  list.replaceChildren();
+  for (const quote of state.note.quotes || []) {
+    const card = make("article", "note-quote-card");
+    const meta = make("div", "note-quote-meta", noteSourceLabel(quote));
+    const remove = make("button", "note-quote-remove", "×");
+    remove.type = "button";
+    remove.title = "删除引用";
+    remove.addEventListener("click", () => deleteNoteQuote(quote.id));
+    meta.append(remove);
+    card.append(meta, make("blockquote", "note-quote-text", quote.quote_text));
+    if (quote.comment) card.append(make("p", "note-quote-comment", quote.comment));
+    card.addEventListener("click", (event) => {
+      if (event.target.closest(".note-quote-remove")) return;
+      jumpToNoteQuote(quote);
+    });
+    list.append(card);
+  }
+}
+
+function jumpToNoteQuote(quote) {
+  const locator = quote.source_locator || {};
+  if (quote.source_type === "pdf" && locator.page) {
+    closeNotesDrawer();
+    goToPdfPage(locator.page);
+    return;
+  }
+  const language = quote.source_type.endsWith("_en") ? "en" : "zh";
+  const container = language === "en" ? $("#englishSummary") : $("#chineseSummary");
+  const target = $$(".structured-block, .structured-paragraph, .structured-bullet, p, li", container)
+    .find((node) => node.textContent.includes(quote.quote_text.slice(0, 80)));
+  if (target) {
+    closeNotesDrawer();
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("note-quote-target");
+    window.setTimeout(() => target.classList.remove("note-quote-target"), 1500);
+  }
+}
+
+function noteSourceLabel(quote) {
+  const labels = { pdf: "PDF 原文", native_en: "系统解析 · English", native_zh: "系统解析 · 中文", doubao_en: "豆包解析 · English", doubao_zh: "豆包解析 · 中文" };
+  return labels[quote.source_type] || "手动引用";
+}
+
+function queueNoteSave() {
+  if (!state.note || !state.currentPaper) return;
+  window.clearTimeout(state.noteSaveTimer);
+  $("#noteSaveState").textContent = "正在保存…";
+  state.noteSaveTimer = window.setTimeout(async () => {
+    try {
+      const result = await api(`/api/papers/${state.currentPaper.id}/notes`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: $("#noteTitleInput").value, body: $("#noteBodyInput").value }) });
+      state.note = result.note;
+      $("#noteSaveState").textContent = "已保存";
+    } catch (error) { $("#noteSaveState").textContent = "保存失败"; handleError(error); }
+  }, 450);
+}
+
+async function addNoteQuote(quote) {
+  if (!state.currentPaper || !quote?.quote_text?.trim()) return;
+  try {
+    const result = await api(`/api/papers/${state.currentPaper.id}/notes/quotes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(quote) });
+    state.note = result.note;
+    renderNoteDrawer();
+    openNotesDrawer();
+    toast("引用已加入笔记");
+  } catch (error) { handleError(error); }
+}
+
+async function deleteNoteQuote(quoteId) {
+  try { await api(`/api/note-quotes/${quoteId}`, { method: "DELETE" }); state.note.quotes = (state.note.quotes || []).filter((quote) => quote.id !== quoteId); renderNoteDrawer(); } catch (error) { handleError(error); }
+}
+
+function addSelectedSummaryQuote() {
+  const selection = window.getSelection();
+  const quoteText = selection?.toString().trim();
+  if (!quoteText || !state.currentPaper) return;
+  const language = selection.anchorNode?.parentElement?.closest("[lang='en']") ? "en" : "zh";
+  const sourceType = state.activeSummarySource === "doubao" ? `doubao_${language}` : `native_${language}`;
+  addNoteQuote({ source_type: sourceType, source_variant_id: state.activeSummarySource === "doubao" ? currentDoubaoVariant()?.id || "" : "", source_locator: { text: quoteText }, quote_text: quoteText });
+  selection.removeAllRanges();
+}
+
+function showSummarySelectionToolbar(event) {
+  const selection = window.getSelection();
+  const text = selection?.toString().trim();
+  if (!selection || selection.isCollapsed || !selection.rangeCount || !text || !state.currentPaper) {
+    closeSummarySelectionToolbar();
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  const startContainer = summaryContainerForNode(range.startContainer);
+  const endContainer = summaryContainerForNode(range.endContainer);
+  if (!startContainer || startContainer !== endContainer || !startContainer.contains(event.target)) {
+    closeSummarySelectionToolbar();
+    return;
+  }
+  const language = startContainer.id === "englishSummary" ? "en" : "zh";
+  if (language === "en" && !isQuoteWorthyEnglishSelection(text)) {
+    closeSummarySelectionToolbar();
+    return;
+  }
+  state.summarySelection = { text, language, anchor: range.getBoundingClientRect() };
+  const toolbar = $("#summarySelectionToolbar");
+  toolbar.hidden = false;
+  toolbar.style.left = `${Math.max(10, Math.min(window.innerWidth - 170, state.summarySelection.anchor.left))}px`;
+  toolbar.style.top = `${Math.max(10, state.summarySelection.anchor.top - 44)}px`;
+}
+
+function summaryContainerForNode(node) {
+  const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  return element?.closest("#englishSummary, #chineseSummary") || null;
+}
+
+function isQuoteWorthyEnglishSelection(text) {
+  const words = String(text || "").match(/[A-Za-z0-9]+(?:[+.#'’/-][A-Za-z0-9]+)*/g) || [];
+  return words.length >= 2;
+}
+
+function closeSummarySelectionToolbar(clearSelection = false) {
+  $("#summarySelectionToolbar").hidden = true;
+  state.summarySelection = null;
+  if (clearSelection) window.getSelection()?.removeAllRanges();
 }
 
 function renderReaderIdentity(paper) {
@@ -1903,7 +2347,11 @@ function structuredBlockElement(block, language, tagName) {
   appendPageReferenceButtons(node, block.page_refs);
   node.addEventListener("click", (event) => {
     if (event.target.closest("[data-page-ref]")) return;
+    if (window.getSelection()?.toString().trim()) return;
     activateSummaryBlock(block.id, language);
+    if (language === "en") {
+      showEnglishTermAtEvent(event, block.text_en || "", block.text_zh || "", null);
+    }
   });
   node.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -1911,9 +2359,6 @@ function structuredBlockElement(block, language, tagName) {
       activateSummaryBlock(block.id, language);
     }
   });
-  if (language === "en" && block.type !== "heading") {
-    node.addEventListener("dblclick", (event) => activateBlockTerm(block, event));
-  }
   return node;
 }
 
@@ -1949,32 +2394,6 @@ function activateSummaryBlock(blockId, sourceLanguage) {
   }
   const label = $("#termLinkLabel b");
   label.textContent = "段落已对齐";
-}
-
-function activateBlockTerm(block, event) {
-  event.preventDefault();
-  const selection = window.getSelection();
-  const selected = selection?.toString().trim() || englishWordAtPoint(event);
-  const selectionRect = selection?.rangeCount
-    ? selection.getRangeAt(0).getBoundingClientRect()
-    : { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 };
-  activateSummaryBlock(block.id, "en");
-  const term = cleanSelectedEnglish(selected);
-  if (term) {
-    translateAndShowWord(
-      {
-        term_en: term,
-        translation_zh: "",
-        paper_id: state.currentPaper.id,
-        paper_title: state.currentPaper.title,
-        source_pair_index: null,
-        context_en: block.text_en || "",
-        context_zh: block.text_zh || "",
-      },
-      selectionRect,
-    );
-  }
-  selection?.removeAllRanges();
 }
 
 function renderMarkdownReport(container, pairs, language, visualAssets = [], paperId = "") {
@@ -2075,10 +2494,10 @@ function summarySegment(pair, index, language) {
   }
   segment.addEventListener("click", (event) => {
     if (event.detail !== 1) return;
-    window.clearTimeout(state.pairClickTimer);
-    state.pairClickTimer = window.setTimeout(() => activatePair(index, language), 220);
+    if (window.getSelection()?.toString().trim()) return;
+    activatePair(index, language);
+    if (language === "en") activateTerm(index, language, event);
   });
-  segment.addEventListener("dblclick", (event) => activateTerm(index, language, event));
   segment.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -2355,32 +2774,35 @@ function activatePair(index, sourceLanguage) {
 }
 
 function activateTerm(index, sourceLanguage, event) {
-  event.preventDefault();
   window.clearTimeout(state.pairClickTimer);
   state.pairClickTimer = null;
-  const selection = window.getSelection();
-  const selected = selection?.toString().trim() || englishWordAtPoint(event);
-  const selectionRect = selection?.rangeCount
-    ? selection.getRangeAt(0).getBoundingClientRect()
-    : { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 };
   const pair = state.currentPaper?.summary_pairs?.[index];
   if (!pair) return;
   activatePair(index, sourceLanguage);
-  const term = cleanSelectedEnglish(selected);
-  if (sourceLanguage === "en" && term) {
-    translateAndShowWord(
-      {
-        term_en: term,
-        translation_zh: "",
-        paper_id: state.currentPaper.id,
-        paper_title: state.currentPaper.title,
-        source_pair_index: index,
-        context_en: pair.en || "",
-        context_zh: pair.zh || "",
-      },
-      selectionRect,
-    );
-  }
+  if (sourceLanguage === "en") showEnglishTermAtEvent(event, pair.en || "", pair.zh || "", index);
+}
+
+function showEnglishTermAtEvent(event, contextEn, contextZh, sourcePairIndex = null) {
+  const selection = window.getSelection();
+  const selected = selection?.toString().trim();
+  const selectedTerm = isSingleEnglishLookupTerm(selected) ? selected : "";
+  const term = cleanSelectedEnglish(selectedTerm || englishWordAtPoint(event));
+  if (!term || !isSingleEnglishLookupTerm(term) || !state.currentPaper) return;
+  const selectionRect = selectedTerm && selection?.rangeCount
+    ? selection.getRangeAt(0).getBoundingClientRect()
+    : { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0, height: 0 };
+  translateAndShowWord(
+    {
+      term_en: term,
+      translation_zh: "",
+      paper_id: state.currentPaper.id,
+      paper_title: state.currentPaper.title,
+      source_pair_index: sourcePairIndex,
+      context_en: contextEn,
+      context_zh: contextZh,
+    },
+    selectionRect,
+  );
   selection?.removeAllRanges();
 }
 
@@ -2398,7 +2820,7 @@ function englishWordAtPoint(event) {
   }
   if (!node || node.nodeType !== Node.TEXT_NODE) return "";
   const parent = node.parentElement;
-  if (!parent?.closest(".segment-text, .structured-block-text")) return "";
+  if (!parent?.closest(".segment-text, .structured-block-text, .external-mapped-block")) return "";
   const text = node.textContent || "";
   const isWordCharacter = (character) => /[A-Za-z0-9+.#'\u2019-]/.test(character || "");
   let start = Math.min(offset, text.length);
@@ -2406,6 +2828,11 @@ function englishWordAtPoint(event) {
   while (start > 0 && isWordCharacter(text[start - 1])) start -= 1;
   while (end < text.length && isWordCharacter(text[end])) end += 1;
   return text.slice(start, end);
+}
+
+function isSingleEnglishLookupTerm(value) {
+  const cleaned = cleanSelectedEnglish(value);
+  return Boolean(cleaned) && !/\s/.test(cleaned);
 }
 
 function cleanSelectedEnglish(value) {
@@ -2581,6 +3008,30 @@ function showSettingsDialog() {
   $("#modelSettingsImportStatus").textContent = "支持 .env.local、.env、JSON";
   updateRemoteSettingsVisibility();
   openDialog("settingsDialog");
+}
+
+async function bootstrapLocalSettings() {
+  if (state.settings.api_key || !state.localConfig.available) return false;
+  const detail = state.localConfig.has_api_key
+    ? "检测到本地 .env.local 配置，其中包含 API Key。确认后会将配置保存到本机 SQLite。"
+    : "检测到本地 .env.local 配置。确认后会将配置保存到本机 SQLite。";
+  const accepted = await confirmAction("发现本地模型配置", detail);
+  if (!accepted) return false;
+  setBusy(true, "正在导入本地模型配置…");
+  try {
+    const result = await api("/api/settings/import-local", { method: "POST" });
+    state.settings = result.settings;
+    state.localConfig = result.local_config || state.localConfig;
+    updateProviderHint();
+    toast(`已导入 ${result.imported_keys?.length || 0} 项本地配置`);
+    return true;
+  } catch (error) {
+    handleError(error);
+    showSettingsDialog();
+    return false;
+  } finally {
+    setBusy(false);
+  }
 }
 
 function updateRemoteSettingsVisibility() {
@@ -3126,6 +3577,31 @@ function bindEvents() {
   $("#backButton").addEventListener("click", () => { location.hash = ""; });
   $("#editPaperButton").addEventListener("click", showEditDialog);
   $("#regenerateButton").addEventListener("click", regenerateSummary);
+  $("#doubaoImportButton").addEventListener("click", showDoubaoImportDialog);
+  $("#notesButton").addEventListener("click", openNotesDrawer);
+  $("#closeNotesButton").addEventListener("click", closeNotesDrawer);
+  $("#quoteSummarySelectionButton").addEventListener("click", () => {
+    const selection = state.summarySelection;
+    if (!selection) return;
+    const sourceType = state.activeSummarySource === "doubao" ? `doubao_${selection.language}` : `native_${selection.language}`;
+    addNoteQuote({ source_type: sourceType, source_variant_id: state.activeSummarySource === "doubao" ? currentDoubaoVariant()?.id || "" : "", source_locator: { text: selection.text }, quote_text: selection.text });
+    closeSummarySelectionToolbar(true);
+  });
+  $("#doubaoImportForm").addEventListener("submit", importDoubaoSummary);
+  $("#noteTitleInput").addEventListener("input", queueNoteSave);
+  $("#noteBodyInput").addEventListener("input", queueNoteSave);
+  $("#addNoteQuoteButton").addEventListener("click", () => addSelectedSummaryQuote());
+  $("#quoteSelectionButton").addEventListener("click", () => {
+    const selection = state.pdfSelection;
+    if (!selection) return;
+    addNoteQuote({ source_type: "pdf", source_locator: { page: selection.page, start_word: selection.start_word, end_word: selection.end_word }, quote_text: selection.selected_text });
+    closePdfSelectionToolbar(true);
+  });
+  $$('[data-summary-source]').forEach((button) => button.addEventListener("click", () => {
+    state.activeSummarySource = button.dataset.summarySource;
+    renderSummarySourceControls();
+    renderActiveSummarySource();
+  }));
   $$('[data-reader-mode]').forEach((button) => {
     button.addEventListener("click", () => {
       setReaderMode(button.dataset.readerMode);
@@ -3288,6 +3764,7 @@ function bindEvents() {
   });
   document.addEventListener("pointermove", trackPdfPointerSelection, { passive: false });
   document.addEventListener("pointerup", finishPdfPointerSelection, { passive: false });
+  document.addEventListener("pointerup", showSummarySelectionToolbar, { passive: true });
   document.addEventListener("pointercancel", finishPdfPointerSelection, { passive: false });
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
@@ -3302,12 +3779,15 @@ function bindEvents() {
     if (event.key === "Escape") {
       closePdfSelectionToolbar(true);
       closeAnnotationPopover();
+      closeSummarySelectionToolbar(true);
+      closeNotesDrawer();
     }
   });
   window.addEventListener("resize", () => {
     closeWordPopover();
     closePdfSelectionToolbar(true);
     closeAnnotationPopover();
+    closeSummarySelectionToolbar(true);
     updatePanelLayout();
   });
   $("#englishSummary").addEventListener("scroll", closeWordPopover);
@@ -3321,7 +3801,8 @@ async function init() {
     await Promise.all([loadTags(), loadSettings()]);
     await loadLibrary();
     await handleRoute();
-    if (!state.settings.api_key) {
+    const importedLocalSettings = await bootstrapLocalSettings();
+    if (!state.settings.api_key && !importedLocalSettings) {
       showSettingsDialog();
       toast("请先配置模型 API 和 Key，或从本地配置文件导入", "error");
     }
