@@ -5,7 +5,9 @@
 
 ## 桌面版
 
-PaperVault 提供 Windows x64 和 Apple Silicon macOS 桌面包。两端复用同一套本地后端与界面，数据分别默认保存在 `%LOCALAPPDATA%\PaperVault` 和 `~/Library/Application Support/PaperVault`。
+当前 Windows x64 桌面版：[下载 PaperVault v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)。解压后运行 `PaperVault\PaperVault.exe`；需要 Microsoft Edge WebView2 Runtime。论文库数据默认保存在 `%LOCALAPPDATA%\PaperVault`，升级应用不会覆盖数据目录。
+
+当前发布先提供 Windows x64 桌面包。桌面版复用本地后端与界面，数据默认保存在 `%LOCALAPPDATA%\PaperVault`；macOS 构建脚本保留，后续可单独发布。
 
 Windows 构建：
 
@@ -19,7 +21,7 @@ Apple Silicon Mac 构建：
 ./build-macos.sh
 ```
 
-产物分别位于 `dist\PaperVault\PaperVault.exe` 和 `dist/PaperVault.app`。推送 `v*` 标签后，GitHub Actions 会同时生成 `windows-x64.zip` 与 `macos-arm64.zip` 发布附件。macOS 包目前为未公证的自分发应用；正式对外发布前应通过 `PAPER_VAULT_CODESIGN_IDENTITY` 配置 Developer ID 签名并完成 Apple notarization。
+Windows 产物位于 `dist\PaperVault\PaperVault.exe`，推送 `v*` 标签后，GitHub Actions 会构建并发布 Windows x64 ZIP。macOS 构建脚本目前仅保留给后续单独发布使用。
 
 开发启动分别使用 `.\start-desktop.ps1` 和 `./start-desktop.sh`。完整说明见 [`docs/DESKTOP.md`](docs/DESKTOP.md)。
 
@@ -43,11 +45,11 @@ Apple Silicon Mac 构建：
 
 ## 版本与发布
 
-当前公开版本是 [`v1.0.0`](https://github.com/skywuxuan/PaperVault/releases/tag/v1.0.0)，这是 PaperVault Windows 桌面版的首个正式发行版。
+当前公开版本是 [`v1.1.0`](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)。
 
-Windows 用户可在 [Releases](https://github.com/skywuxuan/PaperVault/releases) 页面下载 `PaperVault-v1.0.0-windows-x64.zip`。解压后运行 `PaperVault\PaperVault.exe` 即可；系统需要安装 Microsoft Edge WebView2 Runtime（Windows 10/11 通常已经自带）。用户数据保存在 `%LOCALAPPDATA%\PaperVault`，升级程序不会覆盖论文库。
+Windows 用户可在 [Releases](https://github.com/skywuxuan/PaperVault/releases) 页面下载 `PaperVault-v1.1.0-windows-x64.zip`。解压后运行 `PaperVault\PaperVault.exe` 即可；用户数据保存在 `%LOCALAPPDATA%\PaperVault`，升级程序不会覆盖论文库。
 
-版本变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。发布流程由 `.github/workflows/windows-release.yml` 管理：推送形如 `v1.0.0` 的标签后，GitHub Actions 会在 Windows runner 上构建一目录桌面包、压缩 ZIP，并自动创建或更新对应的 GitHub Release。
+版本变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。发布流程由 `.github/workflows/windows-release.yml` 管理：推送形如 `v1.1.0` 的标签后，GitHub Actions 会在 Windows runner 上构建一目录桌面包、压缩 ZIP，并自动创建或更新对应的 GitHub Release。
 
 ### 发行日志
 

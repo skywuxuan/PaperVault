@@ -23,7 +23,7 @@ if (-not (Test-Path $python)) {
         if ($LASTEXITCODE -ne 0) { throw "Python environment creation failed." }
     }
 }
-& $python -c "import sys; raise SystemExit('PaperVault requires Python 3.10 or newer') if sys.version_info < (3, 10) else None"
+& $python -c "import sys; sys.exit('PaperVault requires Python 3.10 or newer') if sys.version_info < (3, 10) else None"
 if ($LASTEXITCODE -ne 0) { throw "Python 3.10 or newer is required." }
 if (-not $SkipInstall) {
     & $python -m pip install --disable-pip-version-check --timeout 120 -r requirements-desktop.txt
