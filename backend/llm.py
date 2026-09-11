@@ -7,6 +7,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .config import apply_environment_settings
+
 
 SYSTEM_PROMPT = """Act as a senior research analyst writing a complete, evidence-grounded paper report.
 Return strict JSON only with this shape:
@@ -80,6 +82,7 @@ class SummaryError(RuntimeError):
 
 
 def generate_summary(title: str, text: str, settings: dict[str, str]) -> tuple[list[dict[str, Any]], str]:
+    settings = apply_environment_settings(settings)
     provider = settings.get("provider", "local")
     if provider == "local":
         return local_draft(title, text), "local"
@@ -126,6 +129,7 @@ def local_draft(title: str, text: str) -> list[dict[str, Any]]:
 
 
 def openai_compatible(title: str, text: str, settings: dict[str, str]) -> list[dict[str, Any]]:
+    settings = apply_environment_settings(settings)
     model = settings.get("model", "gpt-4.1-mini")
     try:
         max_chars = max(5000, min(int(settings.get("max_input_chars", "60000")), 300000))
@@ -150,6 +154,7 @@ def openai_compatible(title: str, text: str, settings: dict[str, str]) -> list[d
 
 
 def translate_english(text: str, context: str, settings: dict[str, str]) -> dict[str, str]:
+    settings = apply_environment_settings(settings)
     if settings.get("provider") != "openai_compatible":
         raise SummaryError("Word translation requires an OpenAI-compatible model")
     payload = {
@@ -187,6 +192,7 @@ def request_structured_json(
     max_tokens: int = 4000,
     timeout: int = 180,
 ) -> tuple[dict[str, Any], int]:
+    settings = apply_environment_settings(settings)
     if settings.get("provider") != "openai_compatible":
         raise SummaryError("This analysis requires an OpenAI-compatible model")
     payload = {
@@ -223,6 +229,7 @@ def request_chat_completion(
     timeout: int,
     task: str = "structured",
 ) -> dict[str, Any]:
+    settings = apply_environment_settings(settings)
     _apply_provider_controls(payload, settings, task=task)
     return _request_chat_completion_details(payload, settings, timeout)
 
@@ -230,6 +237,7 @@ def request_chat_completion(
 def _apply_provider_controls(
     payload: dict[str, Any], settings: dict[str, str], task: str = "structured"
 ) -> None:
+    settings = apply_environment_settings(settings)
     base_url = settings.get("base_url", "")
     hostname = (urllib.parse.urlparse(base_url).hostname or "").casefold()
     model = str(payload.get("model") or settings.get("model", "")).casefold()
@@ -280,6 +288,7 @@ def _request_chat_completion_result(
 def _request_chat_completion_details(
     payload: dict[str, Any], settings: dict[str, str], timeout: int
 ) -> dict[str, Any]:
+    settings = apply_environment_settings(settings)
     api_key = settings.get("api_key", "")
     base_url = settings.get("base_url", "https://api.openai.com/v1").rstrip("/")
     endpoint = f"{base_url}/chat/completions"

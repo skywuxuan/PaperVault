@@ -2,6 +2,19 @@
 
 所有重要变更都会记录在这里。
 
+## [Unreleased]
+
+### 新增
+
+- 新增 Apple Silicon macOS 桌面启动与 `.app` 构建脚本。
+- 发布流水线同时构建 Windows x64 和 macOS arm64 压缩包。
+- 源码启动自动加载 `.env.local` 中的 LLM 与数据目录配置。
+
+### 修复
+
+- 修复 Windows 发布流水线在干净 runner 中因缺少 `.venv` 而直接失败的问题。
+- 环境变量中的 API Base URL、模型和 API Key 现在统一覆盖 SQLite 设置。
+
 ## [1.0.0] - 2026-08-13
 
 PaperVault Windows 桌面版首个正式发行版。

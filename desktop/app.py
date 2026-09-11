@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 from backend import __version__
 from backend.app import PaperVaultServer
+from backend.config import load_local_environment
 
 from .platforms import DesktopPlatform, get_desktop_platform, resource_root
 
@@ -75,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_desktop(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    root = resource_root()
+    load_local_environment(root)
     platform = get_desktop_platform()
     if args.data_dir is not None:
         data_dir = args.data_dir.expanduser().resolve()
@@ -86,7 +89,6 @@ def run_desktop(argv: Sequence[str] | None = None) -> int:
             icon_name=platform.icon_name,
         )
 
-    root = resource_root()
     frontend_dir = root / "frontend"
     if not (frontend_dir / "index.html").is_file():
         raise RuntimeError(f"PaperVault frontend resources are missing: {frontend_dir}")
@@ -105,7 +107,6 @@ def run_desktop(argv: Sequence[str] | None = None) -> int:
     try:
         webview.settings["ALLOW_DOWNLOADS"] = True
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
-        icon_path = root / "desktop" / "assets" / platform.icon_name
         window = webview.create_window(
             WINDOW_TITLE,
             runtime.url,
@@ -123,7 +124,6 @@ def run_desktop(argv: Sequence[str] | None = None) -> int:
             debug=args.debug,
             private_mode=False,
             storage_path=str(platform.webview_storage_dir),
-            icon=str(icon_path) if icon_path.is_file() else None,
         )
     finally:
         runtime.stop()

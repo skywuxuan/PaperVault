@@ -9,15 +9,31 @@ Set-Location $PSScriptRoot
 if ($env:OS -ne "Windows_NT") {
     throw "The Windows package must be built on Windows."
 }
-if (-not (Test-Path ".venv\Scripts\python.exe")) {
-    throw "Run start-desktop.ps1 once to create the local environment."
+$python = ".venv\Scripts\python.exe"
+if (-not (Test-Path $python)) {
+    if ($SkipInstall) {
+        $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+        if ($null -eq $pythonCommand) {
+            throw "Python 3.10 or newer is required."
+        }
+        $python = $pythonCommand.Source
+    } else {
+        Write-Host "[PaperVault] Creating the local Python environment..."
+        python -m venv .venv
+        if ($LASTEXITCODE -ne 0) { throw "Python environment creation failed." }
+    }
 }
+& $python -c "import sys; raise SystemExit('PaperVault requires Python 3.10 or newer') if sys.version_info < (3, 10) else None"
+if ($LASTEXITCODE -ne 0) { throw "Python 3.10 or newer is required." }
 if (-not $SkipInstall) {
-    & ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --timeout 120 -r requirements-desktop.txt
+    & $python -m pip install --disable-pip-version-check --timeout 120 -r requirements-desktop.txt
     if ($LASTEXITCODE -ne 0) { throw "Desktop dependency installation failed." }
 }
 
-& ".venv\Scripts\python.exe" "tools\generate_desktop_icons.py"
+& $python -c "import PyInstaller, webview"
+if ($LASTEXITCODE -ne 0) { throw "Desktop build dependencies are unavailable." }
+
+& $python "tools\generate_desktop_icons.py"
 if ($LASTEXITCODE -ne 0) { throw "Desktop icon generation failed." }
 
 $bundleMode = if ($OneFile) { "--onefile" } else { "--onedir" }
@@ -50,7 +66,7 @@ $pyinstallerArgs = @(
     "papervault_desktop.py"
 )
 
-& ".venv\Scripts\python.exe" @pyinstallerArgs
+& $python @pyinstallerArgs
 if ($LASTEXITCODE -ne 0) { throw "PaperVault Windows build failed." }
 
 $output = if ($OneFile) { "dist\PaperVault.exe" } else { "dist\PaperVault\PaperVault.exe" }

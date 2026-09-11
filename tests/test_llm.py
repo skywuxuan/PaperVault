@@ -24,7 +24,7 @@ from backend.pdf_parser import (
 
 
 class SummaryFormatTestCase(unittest.TestCase):
-    def test_request_uses_saved_key_instead_of_environment_key(self) -> None:
+    def test_request_prefers_environment_key_over_saved_key(self) -> None:
         response = MagicMock()
         response.__enter__.return_value.read.return_value = json.dumps(
             {"choices": [{"message": {"content": "ok"}}]}
@@ -42,7 +42,7 @@ class SummaryFormatTestCase(unittest.TestCase):
             )
         self.assertEqual(result["content"], "ok")
         request = urlopen.call_args.args[0]
-        self.assertEqual(request.get_header("Authorization"), "Bearer saved-key")
+        self.assertEqual(request.get_header("Authorization"), "Bearer environment-key")
 
     def test_official_deepseek_v4_disables_default_thinking(self) -> None:
         payload = {"model": "deepseek-v4-flash"}

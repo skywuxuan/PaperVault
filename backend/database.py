@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from .config import apply_environment_settings
+
 
 SCHEMA_VERSION = 4
 
@@ -1324,7 +1326,9 @@ class Database:
     def get_settings(self, include_secret: bool = False) -> dict[str, str]:
         with self.connect() as connection:
             rows = connection.execute("SELECT key, value FROM settings").fetchall()
-        result = {str(row["key"]): str(row["value"]) for row in rows}
+        result = apply_environment_settings(
+            {str(row["key"]): str(row["value"]) for row in rows}
+        )
         if not include_secret and result.get("api_key"):
             result["api_key"] = "********"
         return result
