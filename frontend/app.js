@@ -36,6 +36,11 @@ const state = {
   vocabularyCandidate: null,
   vocabularyDraft: null,
   editingVocabularyId: null,
+  resourcePackageView: "export",
+  resourcePackageEstimate: null,
+  resourcePackageFile: null,
+  resourcePackageId: "",
+  resourcePackageManifest: null,
   pdfPaperId: null,
   pdfPageCount: 0,
   pdfCurrentPage: 1,
@@ -703,6 +708,174 @@ function downloadTextFile(filename, content, type) {
   window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 
+function downloadBlob(filename, blob) {
+  const blobUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = blobUrl;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+}
+
+function switchResourcePackageView(view) {
+  if (!["export", "restore"].includes(view)) return;
+  state.resourcePackageView = view;
+  $$('[data-resource-view]').forEach((button) => {
+    const active = button.dataset.resourceView === view;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  $$('[data-resource-panel]').forEach((panel) => {
+    panel.hidden = panel.dataset.resourcePanel !== view;
+  });
+  if (view === "export" && $("#resourcePackageDialog")?.open) loadResourcePackageEstimate().catch(handleError);
+}
+
+async function showResourcePackageDialog() {
+  state.resourcePackageFile = null;
+  state.resourcePackageId = "";
+  state.resourcePackageManifest = null;
+  $("#resourceRestoreFile").value = "";
+  $("#resourceRestoreFileTitle").textContent = "选择或拖入 .pvault 资源包";
+  $("#resourceRestoreFileMeta").textContent = "不会上传到公网，只在本机校验和恢复";
+  $("#resourceRestoreSummary").hidden = true;
+  $("#resourceRestoreButton").disabled = true;
+  $("#resourceRestoreProgress").hidden = true;
+  $("#resourceExportProgress").hidden = true;
+  switchResourcePackageView("export");
+  openDialog("resourcePackageDialog");
+  await loadResourcePackageEstimate();
+}
+
+async function loadResourcePackageEstimate() {
+  const data = await api("/api/resource-packages/estimate");
+  state.resourcePackageEstimate = data.estimate;
+  const counts = data.estimate?.counts || {};
+  $("#resourcePaperCount").textContent = String(counts.active_papers ?? counts.papers ?? "—");
+  $("#resourcePdfCount").textContent = String(data.estimate?.pdf_files ?? "—");
+  $("#resourceVocabularyCount").textContent = String(counts.vocabulary ?? "—");
+  $("#resourceNoteCount").textContent = String(counts.notes ?? "—");
+  $("#resourceStandardSize").textContent = `约 ${formatBytes(data.estimate?.standard_bytes || 0)}`;
+  $("#resourceFullSize").textContent = `约 ${formatBytes(data.estimate?.offline_full_bytes || 0)}`;
+}
+
+function setResourcePackageProgress(kind, message, active = true) {
+  const panel = $(kind === "export" ? "#resourceExportProgress" : "#resourceRestoreProgress");
+  const text = $(kind === "export" ? "#resourceExportProgressText" : "#resourceRestoreProgressText");
+  panel.hidden = !active;
+  text.textContent = message;
+}
+
+async function exportResourcePackage() {
+  if ($("#resourceExportButton").disabled) return;
+  const mode = $("input[name='resource_package_mode']:checked", $("#resourcePackageDialog"))?.value || "standard";
+  const button = $("#resourceExportButton");
+  button.disabled = true;
+  setResourcePackageProgress("export", mode === "offline_full" ? "正在快照数据库并收集离线资源…" : "正在快照数据库并收集 PDF…");
+  try {
+    const response = await fetch("/api/resource-packages/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `资源包生成失败 (${response.status})`);
+    }
+    setResourcePackageProgress("export", "正在准备下载文件…");
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const plain = disposition.match(/filename="([^"]+)"/i);
+    const filename = encoded ? decodeURIComponent(encoded[1]) : plain?.[1] || "PaperVault-backup.pvault";
+    downloadBlob(filename, await response.blob());
+    setResourcePackageProgress("export", "资源包已生成并下载。", false);
+    toast("资源包已下载");
+  } catch (error) {
+    setResourcePackageProgress("export", error.message || "资源包生成失败", true);
+    handleError(error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function showResourceRestoreFile(file) {
+  if (!file) return;
+  const validName = String(file.name || "").toLowerCase().endsWith(".pvault");
+  if (!validName) {
+    toast("请选择 .pvault 资源包", "error");
+    return;
+  }
+  state.resourcePackageFile = file;
+  state.resourcePackageId = "";
+  state.resourcePackageManifest = null;
+  $("#resourceRestoreFileTitle").textContent = file.name;
+  $("#resourceRestoreFileMeta").textContent = `${formatBytes(file.size)} · 正在校验文件完整性…`;
+  $("#resourceRestoreSummary").hidden = true;
+  $("#resourceRestoreButton").disabled = true;
+  inspectResourcePackageUpload(file).catch(handleError);
+}
+
+async function inspectResourcePackageUpload(file) {
+  setResourcePackageProgress("restore", "正在校验资源包和数据库完整性…");
+  try {
+    const response = await fetch("/api/resource-packages/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/vnd.papervault+zip" },
+      body: file,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `资源包校验失败 (${response.status})`);
+    state.resourcePackageId = data.package_id;
+    state.resourcePackageManifest = data.manifest;
+    renderResourceRestoreSummary(data.manifest);
+    $("#resourceRestoreFileMeta").textContent = `${formatBytes(file.size)} · 校验通过，仅保存在本机待确认`;
+    setResourcePackageProgress("restore", "校验通过，确认后即可替换当前论文库。", false);
+  } catch (error) {
+    $("#resourceRestoreFileMeta").textContent = "校验失败，请选择其他资源包";
+    setResourcePackageProgress("restore", error.message || "资源包校验失败", true);
+    handleError(error);
+  }
+}
+
+function renderResourceRestoreSummary(manifest) {
+  const counts = manifest?.counts || {};
+  $("#restorePaperCount").textContent = String(counts.active_papers ?? counts.papers ?? 0);
+  $("#restorePdfCount").textContent = String(manifest?.includes?.pdfs ? manifest.files?.filter((item) => String(item.path).startsWith("uploads/")).length || 0 : 0);
+  $("#restoreVocabularyCount").textContent = String(counts.vocabulary ?? 0);
+  $("#restoreNoteCount").textContent = String(counts.notes ?? 0);
+  $("#resourceRestoreMode").textContent = manifest?.mode === "offline_full" ? "离线完整包" : "标准资源包";
+  $("#resourceRestoreSummaryText").textContent = `创建于 ${formatDate(manifest?.created_at)}，包含 ${manifest?.files?.length || 0} 个已校验文件，应用版本 ${manifest?.app_version || "未知"}。`;
+  $("#resourceRestoreSummary").hidden = false;
+  $("#resourceRestoreButton").disabled = false;
+}
+
+async function restoreResourcePackage() {
+  if (!state.resourcePackageId || !state.resourcePackageManifest) return;
+  const counts = state.resourcePackageManifest.counts || {};
+  const accepted = await confirmAction(
+    "恢复资源包",
+    `将用资源包替换当前论文库（${counts.active_papers ?? counts.papers ?? 0} 篇论文、${counts.vocabulary ?? 0} 个词条）。当前库会先自动备份，API Key 不会从资源包恢复。`,
+  );
+  if (!accepted) return;
+  const button = $("#resourceRestoreButton");
+  button.disabled = true;
+  setResourcePackageProgress("restore", "正在备份当前库并替换资源…");
+  try {
+    const result = await api("/api/resource-packages/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ package_id: state.resourcePackageId }),
+    });
+    await Promise.all([loadTags(), loadLibrary()]);
+    closeDialog("resourcePackageDialog");
+    toast(result.auto_backup ? `资源包已恢复，原库已备份为 ${result.auto_backup}` : "资源包已恢复");
+  } catch (error) {
+    button.disabled = false;
+    setResourcePackageProgress("restore", error.message || "恢复失败，当前库未被替换", true);
+    handleError(error);
+  }
+}
+
 function renderTagFilters() {
   const container = $("#tagFilters");
   container.replaceChildren();
@@ -998,6 +1171,7 @@ async function handleRoute() {
   closeWordPopover();
   stopAnalysisPolling();
   const match = location.hash.match(/^#paper\/([0-9a-f-]+)$/);
+  document.body.classList.toggle("reader-page", Boolean(match));
   if (!match) {
     state.currentPaper = null;
     state.analysisRuns = [];
@@ -3576,6 +3750,7 @@ function bindEvents() {
   $("#uploadButton").addEventListener("click", showUploadDialog);
   $("#emptyUploadButton").addEventListener("click", showUploadDialog);
   $("#settingsButton").addEventListener("click", showSettingsDialog);
+  $("#resourcePackageButton").addEventListener("click", () => showResourcePackageDialog().catch(handleError));
   $("#vocabularyButton").addEventListener("click", showVocabularyDialog);
   $("#manageTagsButton").addEventListener("click", () => { renderTagManager(); openDialog("tagsDialog"); });
   $("#sidebarManageTagsButton").addEventListener("click", () => { renderTagManager(); openDialog("tagsDialog"); });
@@ -3639,6 +3814,10 @@ function bindEvents() {
   $("#editForm").addEventListener("submit", handleEdit);
   $("#newTagForm").addEventListener("submit", createTag);
   $("#settingsForm").addEventListener("submit", saveSettings);
+  $$('[data-resource-view]').forEach((button) => button.addEventListener("click", () => switchResourcePackageView(button.dataset.resourceView)));
+  $("#resourceExportButton").addEventListener("click", () => exportResourcePackage().catch(handleError));
+  $("#resourceRestoreFile").addEventListener("change", (event) => showResourceRestoreFile(event.target.files?.[0]));
+  $("#resourceRestoreButton").addEventListener("click", () => restoreResourcePackage().catch(handleError));
   $("#importModelSettingsButton").addEventListener("click", () => $("#modelSettingsFile").click());
   $("#modelSettingsFile").addEventListener("change", importModelSettings);
   $("#vocabularyForm").addEventListener("submit", handleVocabularyForm);
@@ -3716,6 +3895,21 @@ function bindEvents() {
     files.forEach((file) => transfer.items.add(file));
     $("#pdfInput").files = transfer.files;
     showSelectedFiles(transfer.files);
+  });
+
+  const resourceDropZone = $("#resourceRestoreDropzone");
+  for (const eventName of ["dragenter", "dragover"]) {
+    resourceDropZone.addEventListener(eventName, (event) => { event.preventDefault(); resourceDropZone.classList.add("dragging"); });
+  }
+  for (const eventName of ["dragleave", "drop"]) {
+    resourceDropZone.addEventListener(eventName, (event) => { event.preventDefault(); resourceDropZone.classList.remove("dragging"); });
+  }
+  resourceDropZone.addEventListener("drop", (event) => showResourceRestoreFile(event.dataTransfer.files?.[0]));
+  resourceDropZone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      $("#resourceRestoreFile").click();
+    }
   });
   dropZone.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {

@@ -7,6 +7,7 @@ import math
 import mimetypes
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import threading
@@ -31,7 +32,7 @@ from .analysis import (
     representative_chunks,
 )
 from .config import DATA_DIR_ENV, load_local_environment
-from .database import Database, normalize_title_key, utc_now
+from .database import SCHEMA_VERSION, Database, normalize_title_key, utc_now
 from .doubao import fetch_doubao_markdown, markdown_blocks, translate_markdown_to_english
 from .deep_summary import (
     DEEP_SUMMARY_PROMPT_VERSION,
@@ -51,6 +52,14 @@ from .pdf_parser import (
     infer_title,
     infer_publication_year,
     render_preview_page,
+)
+from .resource_package import (
+    MAX_PACKAGE_BYTES,
+    ResourcePackageError,
+    estimate_resource_package,
+    export_resource_package,
+    inspect_resource_package,
+    restore_resource_package,
 )
 
 
@@ -75,6 +84,7 @@ PAPER_NOTES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/notes$")
 VARIANT_TRANSLATION_RE = re.compile(r"^/api/summary-variants/([0-9a-f-]+)/translate-english$")
 NOTE_QUOTES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/notes/quotes$")
 NOTE_QUOTE_ROUTE_RE = re.compile(r"^/api/note-quotes/([0-9a-f-]+)$")
+RESOURCE_PACKAGE_INCOMING_RE = re.compile(r"^/api/resource-packages/incoming/([0-9a-f-]+)$")
 VOCABULARY_STATUSES = {"learning", "mastered"}
 ANNOTATION_COLORS = {"yellow", "green", "blue", "coral"}
 
@@ -91,12 +101,16 @@ class PaperVaultServer(ThreadingHTTPServer):
         self.model_directory = self.data_dir / "models" / "translate-en_zh-1_9"
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.asset_dir.mkdir(parents=True, exist_ok=True)
+        self.resource_backup_dir = self.data_dir / "backups"
+        self.resource_incoming_dir = self.resource_backup_dir / "incoming"
+        self.resource_incoming_dir.mkdir(parents=True, exist_ok=True)
         self.db = Database(self.data_dir / "paper-vault.db")
         self.db.initialize()
         self.deduplicate_library()
         self._job_stop = threading.Event()
         self._job_wakeup = threading.Event()
         self._job_thread: threading.Thread | None = None
+        self.resource_package_lock = threading.RLock()
         super().__init__(address, PaperVaultHandler)
 
     def local_config_values(self) -> dict[str, str]:
@@ -410,6 +424,9 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             entries = self.server.db.list_vocabulary_entries()
             self.send_json({"entries": entries, "total": len(entries)})
             return
+        if path == "/api/resource-packages/estimate":
+            self.resource_package_estimate()
+            return
         if path.startswith("/api/"):
             self.send_error_json(HTTPStatus.NOT_FOUND, "API route not found")
             return
@@ -417,6 +434,15 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/resource-packages/export":
+            self.export_resource_package()
+            return
+        if path == "/api/resource-packages/inspect":
+            self.inspect_resource_package_upload()
+            return
+        if path == "/api/resource-packages/restore":
+            self.restore_resource_package()
+            return
         if path == "/api/settings/import-local":
             self.import_local_settings()
             return
@@ -498,6 +524,10 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
+        match = RESOURCE_PACKAGE_INCOMING_RE.match(path)
+        if match:
+            self.delete_resource_package_upload(match.group(1))
+            return
         match = PAPER_ROUTE_RE.match(path)
         if match:
             self.delete_paper(match.group(1))
@@ -687,6 +717,118 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 }
             )
         return sources
+
+    def resource_package_estimate(self) -> None:
+        try:
+            with self.server.resource_package_lock:
+                estimate = estimate_resource_package(self.server.data_dir)
+        except ResourcePackageError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"estimate": estimate})
+
+    def export_resource_package(self) -> None:
+        try:
+            payload = self.read_json()
+            mode = str(payload.get("mode", "standard")).strip() or "standard"
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        try:
+            with self.server.resource_package_lock:
+                package_path, manifest = export_resource_package(
+                    self.server.data_dir,
+                    mode=mode,
+                    app_version=__version__,
+                    schema_version=SCHEMA_VERSION,
+                )
+        except ResourcePackageError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_download_file(package_path, "application/vnd.papervault+zip")
+
+    def _read_resource_package_upload(self) -> tuple[str, Path]:
+        content_length_text = self.headers.get("Content-Length", "0")
+        try:
+            content_length = int(content_length_text)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("资源包大小无效") from exc
+        if content_length <= 0:
+            raise ValueError("请选择有效的 .pvault 资源包")
+        if content_length > MAX_PACKAGE_BYTES:
+            raise ValueError("资源包超过 2 GB")
+        package_id = str(uuid.uuid4())
+        partial = self.server.resource_incoming_dir / f"{package_id}.part"
+        destination = self.server.resource_incoming_dir / f"{package_id}.pvault"
+        remaining = content_length
+        try:
+            with partial.open("wb") as target:
+                while remaining:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("资源包上传不完整")
+                    target.write(chunk)
+                    remaining -= len(chunk)
+            partial.replace(destination)
+        except Exception:
+            partial.unlink(missing_ok=True)
+            destination.unlink(missing_ok=True)
+            raise
+        return package_id, destination
+
+    def inspect_resource_package_upload(self) -> None:
+        try:
+            package_id, package_path = self._read_resource_package_upload()
+            manifest = inspect_resource_package(package_path, max_schema_version=SCHEMA_VERSION)
+        except (OSError, ResourcePackageError, ValueError) as exc:
+            if "package_path" in locals():
+                package_path.unlink(missing_ok=True)
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"package_id": package_id, "manifest": manifest})
+
+    def restore_resource_package(self) -> None:
+        try:
+            payload = self.read_json()
+            package_id = str(payload.get("package_id", "")).strip()
+            parsed_id = uuid.UUID(package_id)
+        except (ValueError, AttributeError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "资源包确认信息无效")
+            return
+        package_path = self.server.resource_incoming_dir / f"{parsed_id}.pvault"
+        if not package_path.is_file():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "待恢复的资源包不存在或已过期")
+            return
+        temporary_package = self.server.data_dir.parent / f".{parsed_id}.restore.pvault"
+        try:
+            with self.server.resource_package_lock:
+                shutil.copy2(package_path, temporary_package)
+                settings = self.server.db.get_settings(include_secret=True)
+                result = restore_resource_package(
+                    temporary_package,
+                    self.server.data_dir,
+                    preserve_api_key=str(settings.get("api_key", "")),
+                    app_version=__version__,
+                    schema_version=SCHEMA_VERSION,
+                    backup_output_dir=self.server.data_dir.parent / "PaperVault-backups",
+                )
+                self.server.db.initialize()
+        except (OSError, ResourcePackageError, sqlite3.Error) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            temporary_package.unlink(missing_ok=True)
+        self.send_json({"restored": True, **result})
+
+    def delete_resource_package_upload(self, package_id: str) -> None:
+        try:
+            parsed_id = uuid.UUID(package_id)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "资源包 ID 无效")
+            return
+        path = self.server.resource_incoming_dir / f"{parsed_id}.pvault"
+        path.unlink(missing_ok=True)
+        self.send_json({"deleted": True})
 
     def create_paper(self) -> None:
         try:
@@ -1696,6 +1838,26 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 charset = part.get_content_charset() or "utf-8"
                 fields[name] = payload.decode(charset, errors="replace")
         return fields, files
+
+    def send_download_file(self, path: Path, content_type: str) -> None:
+        try:
+            size = path.stat().st_size
+            filename = path.name
+            encoded_name = quote_filename(filename)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(size))
+            self.send_header(
+                "Content-Disposition",
+                f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded_name}",
+            )
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with path.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def send_json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

@@ -27,6 +27,7 @@
     <div class="header-actions">
       <button class="secondary-button header-word-button" id="vocabularyButton" type="button"><span aria-hidden="true">Aa</span> 单词本</button>
       <button class="secondary-button header-tag-button" id="manageTagsButton" type="button"><span aria-hidden="true">#</span> 标签管理</button>
+      <button class="secondary-button header-resource-button" id="resourcePackageButton" type="button"><span aria-hidden="true">▣</span> 备份与恢复</button>
       <button class="icon-button" id="settingsButton" type="button" title="模型设置" aria-label="模型设置">&#9881;</button>
       <button class="primary-button" id="uploadButton" type="button"><span aria-hidden="true">+</span> 导入 PDF</button>
     </div>
@@ -371,6 +372,51 @@
         <button class="primary-button" type="submit">保存设置</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="resourcePackageDialog" class="modal medium-modal resource-package-modal">
+    <div class="modal-header">
+      <div><p class="eyebrow">LOCAL VAULT</p><h2>备份与恢复</h2></div>
+      <button class="icon-button modal-close" type="button" data-close-dialog="resourcePackageDialog" aria-label="关闭" title="关闭">&times;</button>
+    </div>
+    <div class="resource-package-tabs" role="tablist" aria-label="资源包操作">
+      <button class="active" type="button" role="tab" aria-selected="true" data-resource-view="export">生成资源包</button>
+      <button type="button" role="tab" aria-selected="false" data-resource-view="restore">恢复资源包</button>
+    </div>
+    <div class="modal-body resource-package-body">
+      <section id="resourceExportView" data-resource-panel="export">
+        <p class="resource-package-intro">把论文、摘要、笔记和单词本保存成一个可迁移的本地资源包。API Key 和 .env.local 永远不会写入资源包。</p>
+        <div id="resourcePackageInventory" class="resource-package-inventory" aria-live="polite">
+          <div><strong id="resourcePaperCount">—</strong><span>篇论文</span></div>
+          <div><strong id="resourcePdfCount">—</strong><span>个 PDF</span></div>
+          <div><strong id="resourceVocabularyCount">—</strong><span>个词条</span></div>
+          <div><strong id="resourceNoteCount">—</strong><span>条笔记</span></div>
+        </div>
+        <div class="resource-package-modes" role="group" aria-label="资源包类型">
+          <label class="resource-package-mode active"><input type="radio" name="resource_package_mode" value="standard" checked><span><strong>标准资源包</strong><small>数据库 + 原始 PDF，适合日常备份</small><em id="resourceStandardSize">估算中…</em></span></label>
+          <label class="resource-package-mode"><input type="radio" name="resource_package_mode" value="offline_full"><span><strong>离线完整包</strong><small>额外包含预览资产和离线翻译模型</small><em id="resourceFullSize">估算中…</em></span></label>
+        </div>
+        <div id="resourceExportProgress" class="resource-package-progress" aria-live="polite" hidden><span class="mini-spinner"></span><span id="resourceExportProgressText">正在生成资源包…</span></div>
+        <div class="resource-package-actions"><button id="resourceExportButton" class="primary-button" type="button"><span aria-hidden="true">↓</span> 生成并下载</button></div>
+      </section>
+      <section id="resourceRestoreView" data-resource-panel="restore" hidden>
+        <p class="resource-package-intro">选择之前生成的 `.pvault` 文件。恢复前会自动保留当前论文库备份，并在校验通过后替换数据。</p>
+        <label id="resourceRestoreDropzone" class="resource-restore-dropzone" tabindex="0">
+          <input id="resourceRestoreFile" type="file" accept=".pvault,application/vnd.papervault+zip,application/zip" hidden>
+          <span class="resource-restore-icon" aria-hidden="true">↑</span>
+          <strong id="resourceRestoreFileTitle">选择或拖入 .pvault 资源包</strong>
+          <small id="resourceRestoreFileMeta">不会上传到公网，只在本机校验和恢复</small>
+        </label>
+        <div id="resourceRestoreSummary" class="resource-restore-summary" hidden>
+          <div class="resource-restore-summary-header"><strong>资源包已校验</strong><span id="resourceRestoreMode"></span></div>
+          <p id="resourceRestoreSummaryText"></p>
+          <div class="resource-restore-stats"><span><b id="restorePaperCount">—</b> 篇论文</span><span><b id="restorePdfCount">—</b> 个 PDF</span><span><b id="restoreVocabularyCount">—</b> 个词条</span><span><b id="restoreNoteCount">—</b> 条笔记</span></div>
+          <p class="resource-restore-warning">恢复会替换当前论文库；当前数据会先备份到 PaperVault-backups。API Key 不会从资源包恢复。</p>
+        </div>
+        <div id="resourceRestoreProgress" class="resource-package-progress" aria-live="polite" hidden><span class="mini-spinner"></span><span id="resourceRestoreProgressText">正在检查资源包…</span></div>
+        <div class="resource-package-actions"><button id="resourceRestoreButton" class="danger-button" type="button" disabled><span aria-hidden="true">↥</span> 恢复并替换当前库</button></div>
+      </section>
+    </div>
   </dialog>
 
   <dialog id="vocabularyDialog" class="modal vocabulary-modal">
