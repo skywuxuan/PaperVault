@@ -638,8 +638,8 @@ function exportSelectedPapers(format) {
       if (metadata) lines.push(`> ${metadata}`, "");
       if (paper.tags.length) lines.push(`标签：${paper.tags.map((tag) => `\`${tag.name}\``).join(" ")}`, "");
       if (paper.summary_blocks?.length) {
-        lines.push("### 中文完整总结", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "zh", 1));
-        lines.push("", "### Complete English Report", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "en", 1));
+        lines.push("### 中文研究者摘要", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "zh", 1));
+        lines.push("", "### English Researcher Brief", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "en", 1));
       } else {
         lines.push("### 中文摘要", "");
         lines.push(...(paper.summary_pairs || []).map((pair) => `- ${pair.zh || pair.en}`).filter((line) => line !== "- "));
@@ -1857,7 +1857,7 @@ function renderStructuredReport(container, blocks, language) {
     make(
       "h1",
       "markdown-document-title",
-      language === "zh" ? "论文完整详细总结" : "Complete Detailed Paper Summary",
+      language === "zh" ? "论文研究者摘要" : "Researcher Brief",
     ),
   );
   const reportTitle = state.currentPaper?.summary_paper_title || state.currentPaper?.title;
@@ -1981,7 +1981,7 @@ function renderMarkdownReport(container, pairs, language, visualAssets = [], pap
   const heading = make("header", "markdown-document-heading");
   heading.append(
     make("p", "markdown-document-kicker", language === "zh" ? "PAPER REPORT" : "RESEARCH NOTES"),
-    make("h1", "markdown-document-title", language === "zh" ? "论文完整详细总结" : "Complete Paper Report"),
+    make("h1", "markdown-document-title", language === "zh" ? "论文研究者摘要" : "Researcher Brief"),
   );
   if (state.currentPaper?.title) {
     heading.append(make("p", "markdown-document-subtitle", state.currentPaper.title));
@@ -2278,7 +2278,7 @@ function downloadSummaryMarkdown() {
   }
   if (paper.summary_blocks?.length) {
     const lines = [
-      "# 论文完整详细总结",
+      "# 论文研究者摘要",
       "",
       `> 论文：${paper.summary_paper_title || paper.title}`,
       "",
@@ -2286,18 +2286,18 @@ function downloadSummaryMarkdown() {
       "",
       "---",
       "",
-      "# Complete Detailed Paper Summary",
+      "# English Researcher Brief",
       "",
       ...summaryBlocksToMarkdown(paper.summary_blocks, "en"),
     ];
     downloadTextFile(
-      `${paper.title.replace(/[\\/:*?"<>|]+/g, "-").slice(0, 120)}-完整总结.md`,
+      `${paper.title.replace(/[\\/:*?"<>|]+/g, "-").slice(0, 120)}-研究者摘要.md`,
       `${lines.join("\n")}\n`,
       "text/markdown;charset=utf-8",
     );
     return;
   }
-  const lines = ["# 论文完整详细总结", "", `> 论文：${paper.title}`, ""];
+  const lines = ["# 论文研究者摘要", "", `> 论文：${paper.title}`, ""];
   let lastSection = "";
   let sectionIndex = 0;
   let itemIndex = 0;
@@ -2717,17 +2717,17 @@ async function regenerateSummary() {
   if (!paper) return;
   if (state.settings.provider !== "openai_compatible") {
     showSettingsDialog();
-    toast("详细双语摘要需要先配置 OpenAI 兼容模型", "error");
+    toast("双语研究者摘要需要先配置 OpenAI 兼容模型", "error");
     return;
   }
-  setBusy(true, "模型正在通读全文并撰写英文详细总结...");
+  setBusy(true, "模型正在通读全文并撰写英文研究者摘要...");
   try {
     const result = await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
     state.currentPaper = result.paper;
     renderReader();
     await loadLibrary();
     setBusy(false);
-    toast("英文详细总结已完成，正在生成中文翻译");
+    toast("英文研究者摘要已完成，正在生成中文翻译");
     await retrySummaryTranslation({ quietStart: true });
   } catch (error) {
     if (error.data?.paper) {
@@ -2776,7 +2776,7 @@ async function retryFailedPaperSummary(paper) {
       result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
     }
     cacheUpdatedPaper(result.paper);
-    toast(translationOnly ? "中文翻译已完成" : "双语详细总结已重新生成");
+    toast(translationOnly ? "中文翻译已完成" : "双语研究者摘要已重新生成");
   } catch (error) {
     if (error.data?.paper) cacheUpdatedPaper(error.data.paper);
     handleError(error);

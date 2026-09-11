@@ -5,7 +5,9 @@ import unittest
 from unittest.mock import patch
 
 from backend.deep_summary import (
+    ENGLISH_REPORT_PROMPT,
     NUMERIC_TOKEN_RE,
+    TRANSLATION_PROMPT,
     build_summary_input_plan,
     generate_english_report,
     normalize_report,
@@ -78,6 +80,21 @@ class DeepSummaryInputTestCase(unittest.TestCase):
         self.assertNotIn("Conference Header", combined)
         self.assertNotIn("Noisy citation", combined)
         self.assertIn("Body evidence on page 5", combined)
+
+
+class DeepSummaryPromptIntentTestCase(unittest.TestCase):
+    def test_report_prompt_requires_claim_centered_synthesis(self) -> None:
+        self.assertIn("researcher-first synthesis", ENGLISH_REPORT_PROMPT)
+        self.assertIn("executive synthesis", ENGLISH_REPORT_PROMPT)
+        self.assertIn("what the result demonstrates", ENGLISH_REPORT_PROMPT)
+        self.assertIn("Do not produce a section-by-section retelling", ENGLISH_REPORT_PROMPT)
+        self.assertNotIn("Follow the paper's own narrative and technical order", ENGLISH_REPORT_PROMPT)
+
+    def test_translation_prompt_allows_natural_rewriting_with_alignment(self) -> None:
+        self.assertIn("freely reorder", TRANSLATION_PROMPT)
+        self.assertIn("sentences within a block", TRANSLATION_PROMPT)
+        self.assertIn("Do not copy English syntax", TRANSLATION_PROMPT)
+        self.assertIn("Preserve the supplied block IDs and order", TRANSLATION_PROMPT)
 
 
 class DeepSummaryStructureTestCase(unittest.TestCase):

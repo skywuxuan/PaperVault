@@ -12,7 +12,7 @@ from .config import apply_environment_settings
 from backend.llm import SummaryError, request_chat_completion
 
 
-DEEP_SUMMARY_PROMPT_VERSION = "deep-summary-formula-v3"
+DEEP_SUMMARY_PROMPT_VERSION = "deep-summary-researcher-brief-v4"
 MAX_REPORT_OUTPUT_TOKENS = 32000
 TRANSLATION_OUTPUT_TOKENS = 32000
 TRANSLATION_CHUNK_TOKENS = 2400
@@ -20,33 +20,45 @@ TRANSLATION_MAX_WORKERS = 2
 REQUEST_RETRY_DELAYS = (0.5, 1.5)
 
 
-ENGLISH_REPORT_PROMPT = """You are a senior research scientist writing a complete, detailed and readable
-briefing of one research paper.
+ENGLISH_REPORT_PROMPT = """You are a senior research scientist writing a researcher-first synthesis of one
+research paper. The reader should understand the paper's point, mechanism, evidence,
+and boundaries without having to reconstruct the argument from the paper's section
+order.
 
 Read the supplied page-labelled paper in its entirety before composing the report.
-Follow the paper's own narrative and technical order. Reconstruct its actual
-hierarchy instead of forcing it into a fixed checklist.
+Do not produce a section-by-section retelling or a translated table of contents.
+Use the paper's order only to locate and verify evidence. Reorganize the final report
+around the relationships between the central problem, the proposed answer, and the
+evidence that tests it.
 
-The report should normally progress through:
-basic information and core problem; background and limitations of prior work;
-the proposed system in its real module order; data and training; experimental
-setup; evaluation metrics; results and ablations in the order presented by the
-paper; conclusions; explicitly stated limitations and future work; and a final
-synthesis of the paper's genuine innovations.
+Start with an executive synthesis that answers, in a compact paragraph, four questions:
+what problem matters, what the paper changes, what the strongest quantitative result
+is when one exists, and what the available evidence does not establish. Then explain
+the argument in a useful reader order, normally grouping content into:
+- the core gap and why existing approaches fall short;
+- the proposed mechanism as a causal pipeline, clearly separating base components
+  from new contributions;
+- the decisive experiments, organized by the claim each one tests and followed by
+  what the result demonstrates;
+- assumptions, costs, explicitly stated limitations, failure cases, or unanswered
+  questions when the paper provides evidence for them;
+- a short final takeaway that says what should be remembered and when the method is
+  useful.
 
-These are ordering guidelines, not mandatory empty sections. Omit unsupported
-sections and create paper-specific subsection headings when the paper introduces
-distinct modules, stages or experiments.
+These are semantic roles, not mandatory headings. Use paper-specific headings when
+they improve understanding, but do not create one heading for every paper section.
+Avoid exhaustive inventories of parameters and datasets unless they explain a design
+choice, affect reproducibility, or are needed to interpret a result. Avoid repeating
+the same fact in multiple sections. A useful report is usually concise, often about
+10-24 non-empty blocks, but complex papers may require more.
 
-Use coherent paragraphs for explanations, causal relationships and method
-walkthroughs. Use bullet blocks only for genuinely parallel items such as module
-components, datasets, hyperparameters, reward definitions or comparable results.
-Never generate a fixed number of bullets or claims.
-
-Explain not only what the paper reports, but also what important mechanisms and
-quantitative results demonstrate. Preserve exact model names, datasets, sample
-counts, ratios, parameter counts, hyperparameters, formulas, metrics, baseline
-values and before/after results.
+Use coherent paragraphs for explanations, causal relationships, comparisons, and
+interpretations. Use bullet blocks only for genuinely parallel items such as a small
+set of components, datasets, assumptions, or comparable results. Explain what an
+important mechanism and each decisive number demonstrate, rather than merely listing
+them. Preserve exact model names, key datasets, sample counts, ratios, parameter
+counts, hyperparameters, formulas, metrics, baseline values, and before/after results
+when they support a claim.
 
 Write mathematical expressions in standard LaTeX. Use \\( ... \\) for inline
 mathematics and \\[ ... \\] for displayed mathematics. Do not leave formulas as
@@ -62,6 +74,10 @@ Distinguish clearly between:
 
 Do not misrepresent a base component as a proposed innovation. Do not call a system
 two-stage and then present unrelated architectural components as additional stages.
+Separate what the authors claim from what the experiments actually establish. If a
+limitation is an interpretation from the reported setup rather than an explicit
+statement, label it as an interpretation and keep it narrow. Do not invent criticism,
+future work, or missing experiments.
 
 Use only the supplied paper. Do not invent authors, affiliations, publication dates,
 experiments, limitations or future work. If bibliographic information is unclear,
@@ -83,14 +99,18 @@ explanations and bullets only for genuinely parallel facts. Every page reference
 match a supplied [Page N] label. Do not return Chinese or markdown."""
 
 
-TRANSLATION_PROMPT = """Rewrite the supplied structured English research report as a clear, detailed,
-professional Chinese research explanation. The English report is the canonical structure, while the
-page-labelled source evidence is provided to resolve terminology, omitted context, and technical
-relationships. This is a faithful evidence-grounded rewrite, not a word-for-word translation.
+TRANSLATION_PROMPT = """Rewrite the supplied structured English researcher brief as clear, natural,
+professional Chinese research prose. The English report defines the evidence and
+overall argument, while the page-labelled source evidence is provided to resolve
+terminology, omitted context, and technical relationships. This is an
+evidence-grounded rewrite, not a word-for-word translation.
 
-Return strict JSON containing translations only. Preserve every block id and the
-original order. Translate exactly one block into exactly one block. Do not merge,
-split, omit or add information.
+Preserve the supplied block IDs and order so the English and Chinese panels remain
+aligned. Translate exactly one block into exactly one block, but freely reorder
+sentences within a block, combine closely related clauses, remove repetitive framing,
+and add explicit subjects or causal links when the supplied evidence supports them.
+Do not copy English syntax or preserve a source-section rhythm merely because it is
+present in the input. Keep each block focused on its role in the research argument.
 
 Preserve all numbers, formulas, model names, dataset names, metric names, citations
 and standard acronyms. Translate ordinary technical terminology consistently.
@@ -100,8 +120,9 @@ formulas into plain Unicode or caret notation.
 Do not change the certainty, scope, factual meaning or logical relationship of any
 statement. Improve Chinese readability by making subjects, causal links, abbreviations,
 and technical terms explicit when the supplied evidence supports them. Heading translations
-should be concise and suitable for a professional research report. Keep paragraphs coherent
-and explanatory rather than producing telegraphic fragments.
+should be concise and suitable for a researcher brief. Keep paragraphs coherent,
+explanatory, and selective rather than producing telegraphic fragments or literal
+sentence-by-sentence translations.
 
 Return no English blocks, page references, markdown or commentary."""
 
@@ -307,7 +328,7 @@ def generate_english_report(
             settings,
             plan["model"],
             valid_pages,
-            user_prefix="The following page-labelled evidence was prepared from consecutive paper chunks. Reconstruct one coherent report in the original paper order without duplicating facts.",
+            user_prefix="The following page-labelled evidence was prepared from consecutive paper chunks. Use it as a verification record, then reorganize one coherent researcher brief around the paper's claims and evidence. Do not preserve chunk or source-section order merely because the evidence is presented that way.",
         )
         usage_total += usage
 
