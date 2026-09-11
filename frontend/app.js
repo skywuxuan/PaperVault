@@ -514,7 +514,14 @@ async function setPaperRating(paperId, rating) {
     body: JSON.stringify({ rating }),
   });
   const index = state.papers.findIndex((paper) => paper.id === paperId);
+  const previousRating = index >= 0 ? Number(state.papers[index].rating) || 0 : Number(result.paper.rating) || 0;
   if (index >= 0) state.papers[index] = result.paper;
+  if (previousRating !== rating) {
+    const facetRatings = { "0": 0, "1": 0, "2": 0, "3": 0, ...(state.libraryFacets.rating || {}) };
+    facetRatings[String(previousRating)] = Math.max(0, Number(facetRatings[String(previousRating)]) - 1);
+    facetRatings[String(rating)] = Number(facetRatings[String(rating)]) + 1;
+    state.libraryFacets = { ...state.libraryFacets, rating: facetRatings };
+  }
   if (state.currentPaper?.id === paperId) {
     state.currentPaper = result.paper;
     renderReaderIdentity(result.paper);
@@ -1598,10 +1605,8 @@ function renderReader() {
   renderReaderIdentity(paper);
   updatePanelLayout();
   $("#pdfAnnotationCount").textContent = "0 处高亮";
-  const pdfUrl = `/api/papers/${paper.id}/file`;
   renderPdfPreview(paper);
   loadPdfAnnotations(paper.id).catch(handleError);
-  $("#openPdfButton").href = pdfUrl;
   const status = $("#summaryStatus");
   status.className = `status-pill ${paper.summary_status || "pending"}`;
   status.textContent = summarySource(paper);
@@ -3610,7 +3615,6 @@ function bindEvents() {
   });
   $("#downloadMarkdownButton").addEventListener("click", downloadSummaryMarkdown);
   $("#translateSummaryButton").addEventListener("click", () => retrySummaryTranslation());
-  $("#deletePaperButton").addEventListener("click", deleteCurrentPaper);
   $("#pdfPreviousPage").addEventListener("click", () => goToPdfPage(state.pdfCurrentPage - 1));
   $("#pdfNextPage").addEventListener("click", () => goToPdfPage(state.pdfCurrentPage + 1));
   $("#pdfZoomOut").addEventListener("click", () => setPdfZoom(state.pdfZoom - 0.1));
