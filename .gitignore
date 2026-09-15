@@ -8,6 +8,7 @@ htmlcov/
 build/
 dist/
 *.spec
+!packaging/*.spec
 
 # Local configuration and runtime logs
 .env

@@ -1,9 +1,9 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-        filevers=(1, 1, 0, 0),
-        prodvers=(1, 1, 0, 0),
+    filevers={numeric_version},
+    prodvers={numeric_version},
     mask=0x3f,
-    flags=0x0,
+    flags={flags},
     OS=0x40004,
     fileType=0x1,
     subtype=0x0,
@@ -16,11 +16,11 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'Rasin-wu'),
           StringStruct(u'FileDescription', u'PaperVault desktop application'),
-          StringStruct(u'FileVersion', u'1.1.0'),
+          StringStruct(u'FileVersion', u'{version}'),
           StringStruct(u'InternalName', u'PaperVault'),
           StringStruct(u'OriginalFilename', u'PaperVault.exe'),
           StringStruct(u'ProductName', u'PaperVault'),
-          StringStruct(u'ProductVersion', u'1.1.0')
+          StringStruct(u'ProductVersion', u'{version}')
         ]
       )
     ]),

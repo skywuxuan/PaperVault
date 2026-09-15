@@ -37,36 +37,13 @@ fi
 "$python_command" -c "import PyInstaller, webview"
 "$python_command" tools/generate_desktop_icons.py
 
-pyinstaller_args=(
-  -m PyInstaller
-  --noconfirm
-  --clean
-  --windowed
-  --onedir
-  --name PaperVault
-  --specpath build
-  --workpath build/pyinstaller-macos
-  --distpath dist
-  --icon desktop/assets/papervault.icns
-  --osx-bundle-identifier com.rasinwu.papervault
-  --target-architecture arm64
-  --add-data "frontend:frontend"
-  --add-data "desktop/assets:desktop/assets"
-  --collect-all webview
-  --collect-all cmudict
-  --hidden-import webview.platforms.cocoa
-  --exclude-module PyQt5
-  --exclude-module PyQt6
-  --exclude-module PySide2
-  --exclude-module PySide6
-  --exclude-module cefpython3
-)
-if [[ -n "${PAPER_VAULT_CODESIGN_IDENTITY:-}" ]]; then
-  pyinstaller_args+=(--codesign-identity "$PAPER_VAULT_CODESIGN_IDENTITY")
-fi
-pyinstaller_args+=(papervault_desktop.py)
-
-"$python_command" "${pyinstaller_args[@]}"
+"$python_command" tools/desktop_version.py
+"$python_command" -m PyInstaller \
+  --noconfirm \
+  --clean \
+  --workpath build/pyinstaller-macos \
+  --distpath dist \
+  packaging/macos.spec
 
 if [[ ! -d "dist/PaperVault.app" ]]; then
   echo "PaperVault macOS build did not produce dist/PaperVault.app." >&2

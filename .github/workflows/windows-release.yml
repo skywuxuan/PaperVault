@@ -9,8 +9,38 @@ permissions:
   contents: write
 
 jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test package version metadata
+        run: python -m unittest discover -s tests -p test_desktop_version.py
+
+      - name: Verify release tag matches package version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python tools/desktop_version.py --check-tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
+
+      - name: Verify version-specific release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python tools/release_notes.py --version "$RELEASE_TAG" --output release-notes.md
+
   build-windows:
     runs-on: windows-latest
+    needs: [validate-version]
 
     steps:
       - name: Check out source
@@ -35,9 +65,10 @@ jobs:
 
       - name: Create release archive
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate-version.outputs.version }}
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          $archive = "dist\PaperVault-v$version-windows-x64.zip"
+          $archive = "dist\PaperVault-v$env:RELEASE_VERSION-windows-x64.zip"
           Compress-Archive -Path "dist\PaperVault" -DestinationPath $archive
 
       - name: Upload Windows archive
@@ -48,11 +79,21 @@ jobs:
 
   publish-release:
     runs-on: ubuntu-latest
-    needs: [build-windows]
+    needs: [validate-version, build-windows]
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare version-specific release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python tools/release_notes.py --version "$RELEASE_TAG" --output release-notes.md
 
       - name: Download release archives
         uses: actions/download-artifact@v4
@@ -65,6 +106,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: PaperVault ${{ github.ref_name }}
-          body_path: CHANGELOG.md
+          body_path: release-notes.md
           files: dist/PaperVault-*.zip
-          generate_release_notes: true
+          generate_release_notes: false
+          prerelease: ${{ needs.validate-version.outputs.prerelease == 'true' }}

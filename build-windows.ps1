@@ -36,11 +36,14 @@ if ($LASTEXITCODE -ne 0) { throw "Desktop build dependencies are unavailable." }
 & $python "tools\generate_desktop_icons.py"
 if ($LASTEXITCODE -ne 0) { throw "Desktop icon generation failed." }
 
+& $python "tools\desktop_version.py" --windows-output "build\windows-version.txt"
+if ($LASTEXITCODE -ne 0) { throw "Desktop version metadata generation failed." }
+
 $bundleMode = if ($OneFile) { "--onefile" } else { "--onedir" }
 $frontendPath = (Resolve-Path "frontend").Path
 $iconPath = (Resolve-Path "desktop\assets\papervault.ico").Path
 $assetPath = (Resolve-Path "desktop\assets").Path
-$versionPath = (Resolve-Path "packaging\windows-version.txt").Path
+$versionPath = (Resolve-Path "build\windows-version.txt").Path
 $pyinstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
