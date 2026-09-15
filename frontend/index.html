@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f6f5">
-  <title>PaperVault - 本地论文库</title>
+  <meta name="theme-color" content="#f7f7fa">
+  <title>PaperVault · 你的研究资料库</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <script>
     window.MathJax = {
@@ -18,25 +19,42 @@
   <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </head>
 <body>
+  <svg class="icon-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 4.5h6a3 3 0 0 1 2 1 3 3 0 0 1 2-1h6v15h-6a3 3 0 0 0-2 1 3 3 0 0 0-2-1H4z"/><path d="M12 5.5v15M7 8h2M15 8h2M7 11h2M15 11h2"/></symbol>
+    <symbol id="icon-stack" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="15" rx="2"/><path d="M9 7h6M9 11h6M3 7v12a2 2 0 0 0 2 2h10"/></symbol>
+    <symbol id="icon-tag" viewBox="0 0 24 24"><path d="M3 5a2 2 0 0 1 2-2h6l10 10-8 8L3 11z"/><circle cx="7.5" cy="7.5" r="1.2"/></symbol>
+    <symbol id="icon-archive" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="5" rx="1.5"/><path d="M5 8v12h14V8M9 12h6"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="m9 4 1-2h4l1 2 2 1 2-.2 2 3-1 2v3l1 2-2 3-2-.2-2 1-1 2h-4l-1-2-2-1-2 .2-2-3 1-2v-3L3 8l2-3L7 5z"/><circle cx="12" cy="11.5" r="3.2"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+    <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="m10 5-7 7 7 7M3 12h18"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M19 11a7 7 0 0 0-12-5L4 9M5 13a7 7 0 0 0 12 5l3-3"/></symbol>
+    <symbol id="icon-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z"/></symbol>
+    <symbol id="icon-edit" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L20 8a2.1 2.1 0 0 0-5-5L4 14z"/></symbol>
+    <symbol id="icon-note" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8M8 16h5"/></symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24"><path d="M4 16v4h16v-4M12 3v13M7 8l5-5 5 5"/></symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M4 16v4h16v-4M12 3v13M7 11l5 5 5-5"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  </defs></svg>
   <header class="app-header">
     <a class="brand" href="#" aria-label="返回论文库">
-      <span class="brand-mark" aria-hidden="true">PV</span>
+      <span class="brand-mark" aria-hidden="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-book"></use></svg></span>
       <span class="brand-text">PaperVault</span>
-      <span id="runtimeBadge" class="local-badge">LOCAL</span>
+      <span id="runtimeBadge" class="local-badge" title="浏览器版">WEB</span>
     </a>
     <div class="header-actions">
-      <button class="secondary-button header-word-button" id="vocabularyButton" type="button"><span aria-hidden="true">Aa</span> 单词本</button>
-      <button class="secondary-button header-tag-button" id="manageTagsButton" type="button"><span aria-hidden="true">#</span> 标签管理</button>
-      <button class="secondary-button header-resource-button" id="resourcePackageButton" type="button"><span aria-hidden="true">▣</span> 备份与恢复</button>
-      <button class="icon-button" id="settingsButton" type="button" title="模型设置" aria-label="模型设置">&#9881;</button>
-      <button class="primary-button" id="uploadButton" type="button"><span aria-hidden="true">+</span> 导入 PDF</button>
+      <button class="secondary-button header-word-button" id="vocabularyButton" type="button" title="单词本" aria-label="单词本"><svg class="ui-icon" aria-hidden="true"><use href="#icon-book"></use></svg> 单词本</button>
+      <button class="secondary-button header-tag-button" id="manageTagsButton" type="button" title="标签管理" aria-label="标签管理"><svg class="ui-icon" aria-hidden="true"><use href="#icon-tag"></use></svg> 标签管理</button>
+      <button class="secondary-button header-resource-button" id="resourcePackageButton" type="button" title="备份与恢复" aria-label="备份与恢复"><svg class="ui-icon" aria-hidden="true"><use href="#icon-archive"></use></svg> 备份与恢复</button>
+      <button class="icon-button" id="settingsButton" type="button" title="模型设置" aria-label="模型设置"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"></use></svg></button>
+      <button class="primary-button" id="uploadButton" type="button" title="导入 PDF" aria-label="导入 PDF"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg> 导入 PDF</button>
     </div>
   </header>
 
   <main id="libraryView" class="app-shell">
     <aside class="library-sidebar" aria-label="论文筛选">
       <div class="sidebar-heading">
-        <span>资料库</span>
+        <span>研究资料库</span>
         <span id="totalCount" class="count-badge">0</span>
       </div>
       <button class="filter-item active" type="button" data-tag-id="">
@@ -44,7 +62,7 @@
         <span>全部论文</span>
         <span id="allPaperCount" class="filter-count">0</span>
       </button>
-      <div class="sidebar-section-title">自定义标签</div>
+      <div class="sidebar-section-title">按主题整理</div>
       <div id="tagFilters" class="tag-filters"></div>
       <button id="sidebarManageTagsButton" class="sidebar-manage-button" type="button"><span aria-hidden="true">+</span> 管理标签</button>
       <div class="sidebar-section-title">摘要状态</div>
@@ -53,7 +71,7 @@
         <button class="filter-item" type="button" data-summary-filter="error"><span class="facet-icon error">!</span><span>生成失败</span><span id="summaryErrorCount" class="filter-count">0</span></button>
         <button class="filter-item" type="button" data-summary-filter="pending"><span class="facet-icon pending">…</span><span>待处理</span><span id="summaryPendingCount" class="filter-count">0</span></button>
       </div>
-      <div class="sidebar-section-title">推荐度</div>
+      <div class="sidebar-section-title">阅读推荐</div>
       <div id="ratingFilters" class="facet-list">
         <button class="filter-item" type="button" data-rating-filter="3"><span class="facet-icon star">★</span><span>三星推荐</span><span id="rating3Count" class="filter-count">0</span></button>
         <button class="filter-item" type="button" data-rating-filter="2"><span class="facet-icon star">★</span><span>二星推荐</span><span id="rating2Count" class="filter-count">0</span></button>
@@ -65,12 +83,13 @@
     <section class="library-content">
       <div class="library-toolbar">
         <div>
-          <p class="eyebrow">RESEARCH LIBRARY</p>
-          <h1>我的论文库 <span id="libraryTotalInline" class="library-total-inline">0</span></h1>
+          <p class="eyebrow">YOUR RESEARCH, CONNECTED</p>
+          <h1>论文库 <span id="libraryTotalInline" class="library-total-inline">0</span></h1>
+          <p class="library-subtitle">整理文献，沉淀每一次阅读。</p>
         </div>
         <div class="library-tools">
           <div class="search-field">
-            <span aria-hidden="true">&#9906;</span>
+            <svg class="ui-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
             <input id="searchInput" type="search" aria-label="搜索论文" placeholder="搜索标题、作者、摘要或标签" autocomplete="off">
             <button id="clearSearchButton" class="search-clear" type="button" aria-label="清空搜索" title="清空搜索">&times;</button>
           </div>
@@ -124,44 +143,44 @@
 
       <div id="paperListHeader" class="paper-list-header">
         <label class="paper-checkbox select-all-checkbox" title="选择当前结果"><input id="selectAllPapers" type="checkbox"><span></span></label>
-        <span>论文</span><span>入库信息</span><span aria-hidden="true"></span>
+        <span>文献与摘要</span><span>阅读状态 · 入库信息</span><span aria-hidden="true"></span>
       </div>
 
       <div id="paperList" class="paper-list" aria-live="polite"></div>
 
       <div id="emptyState" class="empty-state" hidden>
-        <div class="empty-symbol" aria-hidden="true">P</div>
-        <h2 id="emptyTitle">还没有论文</h2>
-        <p id="emptyText">上传第一篇 PDF，建立你的本地研究资料库。</p>
-        <button class="primary-button" id="emptyUploadButton" type="button"><span aria-hidden="true">+</span> 上传论文</button>
+        <div class="empty-symbol" aria-hidden="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-stack"></use></svg></div>
+        <h2 id="emptyTitle">从第一篇论文开始</h2>
+        <p id="emptyText">导入 PDF，把摘要、批注和研究笔记整理在一起。</p>
+        <button class="primary-button" id="emptyUploadButton" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg> 导入第一篇论文</button>
       </div>
     </section>
   </main>
 
   <main id="readerView" class="reader-view" hidden>
     <div class="reader-topbar">
-      <button id="backButton" class="icon-button" type="button" title="返回论文库" aria-label="返回论文库">&#8592;</button>
+      <button id="backButton" class="icon-button" type="button" title="返回论文库" aria-label="返回论文库"><svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg></button>
       <div class="reader-identity">
         <h1 id="readerTitle">论文标题</h1>
         <div id="readerMeta" class="reader-meta"></div>
       </div>
       <div class="reader-actions">
-        <button id="regenerateButton" class="secondary-button" type="button"><span aria-hidden="true">&#8635;</span> 生成摘要</button>
-        <button id="doubaoImportButton" class="secondary-button" type="button"><span aria-hidden="true">✦</span> 豆包解析</button>
-        <button id="notesButton" class="secondary-button notes-launch-button" type="button"><span aria-hidden="true">✎</span> 我的笔记</button>
-        <button id="editPaperButton" class="secondary-button" type="button"><span aria-hidden="true">&#9998;</span> 编辑</button>
+        <button id="regenerateButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-refresh"></use></svg> 生成摘要</button>
+        <button id="doubaoImportButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-spark"></use></svg> 豆包解析</button>
+        <button id="notesButton" class="secondary-button notes-launch-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-note"></use></svg> 我的笔记</button>
+        <button id="editPaperButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-edit"></use></svg> 编辑</button>
       </div>
     </div>
     <nav class="reader-modebar" aria-label="阅读模式">
         <div class="reader-mode-tabs" role="tablist" aria-label="论文阅读模式">
-          <button class="active" type="button" role="tab" aria-selected="true" data-reader-mode="deep"><span aria-hidden="true">文</span> 双语深读</button>
+          <button class="active" type="button" role="tab" aria-selected="true" data-reader-mode="deep"><svg class="ui-icon" aria-hidden="true"><use href="#icon-book"></use></svg> 双语阅读</button>
         </div>
       <span id="readerTaskSummary" class="reader-task-summary">阅读器就绪</span>
     </nav>
     <div id="readerGrid" class="reader-grid">
       <section id="pdfPanel" class="reader-panel pdf-panel" data-panel="pdf">
         <div class="panel-header">
-          <div><span class="panel-index">01</span><h2>原始论文</h2></div>
+          <div><span class="panel-index">01</span><h2>论文原文</h2></div>
           <div class="panel-header-actions">
             <span id="pdfMeta" class="panel-meta"></span>
             <button class="panel-collapse-button" type="button" data-collapse-panel="pdf" title="折叠原始论文" aria-label="折叠原始论文" aria-expanded="true">−</button>
@@ -185,10 +204,10 @@
       </section>
       <section id="englishPanel" class="reader-panel summary-panel" data-panel="english" aria-labelledby="englishHeading">
         <div class="panel-header">
-          <div><span class="panel-index english-index">02</span><h2 id="englishHeading">English Summary</h2></div>
+          <div><span class="panel-index english-index">02</span><h2 id="englishHeading">英文摘要</h2></div>
           <div class="panel-header-actions">
             <div class="summary-source-switch" role="group" aria-label="摘要来源">
-              <button type="button" class="active" data-summary-source="native">系统解析</button>
+              <button type="button" class="active" data-summary-source="native">论文摘要</button>
               <button type="button" data-summary-source="doubao">豆包解析</button>
             </div>
             <span id="summaryStatus" class="status-pill"></span>
@@ -219,16 +238,16 @@
     </div>
   </main>
 
-  <dialog id="uploadDialog" class="modal medium-modal">
+  <dialog id="uploadDialog" class="modal medium-modal" aria-labelledby="uploadDialogTitle">
     <form id="uploadForm" method="dialog">
       <div class="modal-header">
-        <div><p class="eyebrow">BATCH IMPORT</p><h2>导入 PDF 论文</h2></div>
-        <button class="icon-button modal-close" type="button" data-close-dialog="uploadDialog" aria-label="关闭" title="关闭">&times;</button>
+        <div><p class="eyebrow">ADD TO YOUR LIBRARY</p><h2 id="uploadDialogTitle">导入 PDF 论文</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="uploadDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
       <div class="modal-body">
         <label id="dropZone" class="drop-zone" tabindex="0">
           <input id="pdfInput" name="file" type="file" accept="application/pdf,.pdf" multiple required>
-          <span class="upload-symbol" aria-hidden="true">PDF</span>
+          <span class="upload-symbol" aria-hidden="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-upload"></use></svg></span>
           <strong id="dropTitle">选择一个或多个 PDF</strong>
           <span id="dropMeta">或拖放到此处，单个文件最大 100 MB</span>
         </label>
@@ -241,13 +260,13 @@
           <label class="field field-wide"><span>DOI</span><input name="doi" type="text" placeholder="10.xxxx/xxxxx"></label>
         </div>
         <fieldset class="tag-picker-fieldset">
-          <legend>公共标签</legend>
+          <legend>添加标签</legend>
           <div id="uploadTagPicker" class="tag-picker"></div>
         </fieldset>
         <label class="toggle-row">
           <input name="generate_summary" type="checkbox" checked>
           <span class="toggle-track"><i></i></span>
-          <span><strong>上传后生成双语摘要</strong><small id="uploadProviderHint">本地结构索引（非机器翻译）</small></span>
+          <span><strong id="uploadSummaryLabel">导入后建立内容索引</strong><small id="uploadProviderHint">在本机提取章节与关键内容</small></span>
         </label>
       </div>
       <div class="modal-footer">
@@ -257,11 +276,11 @@
     </form>
   </dialog>
 
-  <dialog id="batchTagsDialog" class="modal small-modal">
+  <dialog id="batchTagsDialog" class="modal small-modal" aria-labelledby="batchTagsDialogTitle">
     <form id="batchTagsForm" method="dialog">
       <div class="modal-header">
-        <div><p class="eyebrow">BATCH CLASSIFY</p><h2>批量管理标签</h2></div>
-        <button class="icon-button modal-close" type="button" data-close-dialog="batchTagsDialog" aria-label="关闭" title="关闭">&times;</button>
+        <div><p class="eyebrow">BATCH CLASSIFY</p><h2 id="batchTagsDialogTitle">批量管理标签</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="batchTagsDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
       <div class="modal-body">
         <p class="batch-dialog-summary">将对已选的 <strong id="batchTagsPaperCount">0</strong> 篇论文执行操作。</p>
@@ -281,11 +300,11 @@
     </form>
   </dialog>
 
-  <dialog id="editDialog" class="modal large-modal">
+  <dialog id="editDialog" class="modal large-modal" aria-labelledby="editDialogTitle">
     <form id="editForm" method="dialog">
       <div class="modal-header">
-        <div><p class="eyebrow">EDIT RECORD</p><h2>编辑论文</h2></div>
-        <button class="icon-button modal-close" type="button" data-close-dialog="editDialog" aria-label="关闭" title="关闭">&times;</button>
+        <div><p class="eyebrow">EDIT RECORD</p><h2 id="editDialogTitle">编辑论文</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="editDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
       <div class="modal-body edit-body">
         <div class="form-grid two-columns">
@@ -315,10 +334,10 @@
     </form>
   </dialog>
 
-  <dialog id="tagsDialog" class="modal small-modal">
+  <dialog id="tagsDialog" class="modal small-modal" aria-labelledby="tagsDialogTitle">
     <div class="modal-header">
-      <div><p class="eyebrow">CLASSIFICATION</p><h2>标签管理</h2></div>
-      <button class="icon-button modal-close" type="button" data-close-dialog="tagsDialog" aria-label="关闭" title="关闭">&times;</button>
+      <div><p class="eyebrow">CLASSIFICATION</p><h2 id="tagsDialogTitle">标签管理</h2></div>
+      <button class="icon-button modal-close" type="button" data-close-dialog="tagsDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     </div>
     <div class="modal-body">
       <form id="newTagForm" class="new-tag-form">
@@ -330,23 +349,25 @@
     </div>
   </dialog>
 
-  <dialog id="settingsDialog" class="modal medium-modal">
+  <dialog id="settingsDialog" class="modal medium-modal" aria-labelledby="settingsDialogTitle">
     <form id="settingsForm" method="dialog">
       <div class="modal-header">
-        <div><p class="eyebrow">LLM ADAPTER</p><h2>模型设置</h2></div>
-        <button class="icon-button modal-close" type="button" data-close-dialog="settingsDialog" aria-label="关闭" title="关闭">&times;</button>
+        <div><p class="eyebrow">MODEL SETTINGS</p><h2 id="settingsDialogTitle">模型设置</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="settingsDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
       <div class="modal-body">
-        <label class="field"><span>摘要引擎</span>
+        <label class="field"><span>摘要生成方式</span>
           <select name="provider">
-            <option value="local">本地结构索引（非翻译）</option>
-            <option value="openai_compatible">OpenAI 兼容接口</option>
+            <option value="local">本地索引 · 无需 API</option>
+            <option value="openai_compatible">AI 双语摘要 · OpenAI 兼容接口</option>
           </select>
         </label>
         <div id="remoteSettings" class="remote-settings">
-          <label class="field"><span>API Base URL</span><input name="base_url" type="url" placeholder="https://api.openai.com/v1"></label>
-          <label class="field"><span>默认模型</span><input name="model" type="text" placeholder="gpt-4.1-mini"></label>
-          <div class="form-grid two-columns">
+          <label class="field"><span>服务地址（Base URL）</span><input name="base_url" type="url" placeholder="https://api.openai.com/v1"></label>
+          <label class="field"><span>默认模型</span><input name="model" type="text" placeholder="填写服务商提供的模型名称"></label>
+          <details class="advanced-settings">
+            <summary>高级模型设置</summary>
+            <div class="form-grid two-columns">
             <label class="field"><span>英文分析模型</span><input name="analysis_model" type="text" placeholder="留空则使用默认模型"></label>
             <label class="field"><span>中文翻译模型</span><input name="translation_model" type="text" placeholder="留空则使用默认模型"></label>
             <label class="field"><span>模型上下文长度（tokens）</span><input name="context_window_tokens" type="number" min="16000" max="2000000" placeholder="自动识别"></label>
@@ -357,15 +378,16 @@
               </select>
             </label>
           </div>
-          <p class="settings-inline-note">Pro 类模型通常更适合最终综合，但不会自动切换；英文分析和中文翻译始终按你的选择调用。</p>
-          <label class="field"><span>API Key</span><input name="api_key" type="password" autocomplete="off" placeholder="保留现有密钥"></label>
+          <p class="settings-inline-note">可以为分析与翻译分别指定模型。留空时使用默认模型；更高的推理强度可能增加耗时和费用。</p>
+          </details>
+          <label class="field"><span>API 密钥</span><input name="api_key" type="password" autocomplete="off" placeholder="保留现有密钥"></label>
           <div class="settings-import-row">
             <input id="modelSettingsFile" type="file" accept=".env,.local,.json,.txt,application/json,text/plain" hidden>
             <button id="importModelSettingsButton" class="secondary-button" type="button">从本地配置导入</button>
             <span id="modelSettingsImportStatus">支持 .env.local、.env、JSON</span>
           </div>
         </div>
-        <div class="local-note"><span aria-hidden="true">&#9632;</span><p>本地配置文件仅在浏览器中读取并填入表单，不会上传文件。确认保存后，配置和密钥保存在本机 SQLite 数据库中；服务不会从环境变量读取 Key。</p></div>
+        <div class="local-note"><span aria-hidden="true">&#9632;</span><p>配置文件用于填入此表单，保存后才会生效。配置和密钥保存在运行 PaperVault 的设备上；AI 摘要使用你指定的模型服务。</p></div>
       </div>
       <div class="modal-footer">
         <button class="secondary-button" type="button" data-close-dialog="settingsDialog">取消</button>
@@ -374,10 +396,10 @@
     </form>
   </dialog>
 
-  <dialog id="resourcePackageDialog" class="modal medium-modal resource-package-modal">
+  <dialog id="resourcePackageDialog" class="modal medium-modal resource-package-modal" aria-labelledby="resourcePackageDialogTitle">
     <div class="modal-header">
-      <div><p class="eyebrow">LOCAL VAULT</p><h2>备份与恢复</h2></div>
-      <button class="icon-button modal-close" type="button" data-close-dialog="resourcePackageDialog" aria-label="关闭" title="关闭">&times;</button>
+      <div><p class="eyebrow">BACKUP &amp; RESTORE</p><h2 id="resourcePackageDialogTitle">备份与恢复</h2></div>
+      <button class="icon-button modal-close" type="button" data-close-dialog="resourcePackageDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     </div>
     <div class="resource-package-tabs" role="tablist" aria-label="资源包操作">
       <button class="active" type="button" role="tab" aria-selected="true" data-resource-view="export">生成资源包</button>
@@ -385,7 +407,7 @@
     </div>
     <div class="modal-body resource-package-body">
       <section id="resourceExportView" data-resource-panel="export">
-        <p class="resource-package-intro">把论文、摘要、笔记和单词本保存成一个可迁移的本地资源包。API Key 和 .env.local 永远不会写入资源包。</p>
+        <p class="resource-package-intro">将论文、摘要、笔记和单词本打包保存，方便备份或迁移到另一台设备。资源包不包含 API 密钥。</p>
         <div id="resourcePackageInventory" class="resource-package-inventory" aria-live="polite">
           <div><strong id="resourcePaperCount">—</strong><span>篇论文</span></div>
           <div><strong id="resourcePdfCount">—</strong><span>个 PDF</span></div>
@@ -400,12 +422,12 @@
         <div class="resource-package-actions"><button id="resourceExportButton" class="primary-button" type="button"><span aria-hidden="true">↓</span> 生成并下载</button></div>
       </section>
       <section id="resourceRestoreView" data-resource-panel="restore" hidden>
-        <p class="resource-package-intro">选择之前生成的 `.pvault` 文件。恢复前会自动保留当前论文库备份，并在校验通过后替换数据。</p>
+        <p class="resource-package-intro">选择之前导出的 <code>.pvault</code> 资源包。校验通过后，PaperVault 会先备份当前论文库，再恢复资源包中的数据。</p>
         <label id="resourceRestoreDropzone" class="resource-restore-dropzone" tabindex="0">
           <input id="resourceRestoreFile" type="file" accept=".pvault,application/vnd.papervault+zip,application/zip" hidden>
           <span class="resource-restore-icon" aria-hidden="true">↑</span>
           <strong id="resourceRestoreFileTitle">选择或拖入 .pvault 资源包</strong>
-          <small id="resourceRestoreFileMeta">不会上传到公网，只在本机校验和恢复</small>
+          <small id="resourceRestoreFileMeta">由当前 PaperVault 服务完成校验和恢复</small>
         </label>
         <div id="resourceRestoreSummary" class="resource-restore-summary" hidden>
           <div class="resource-restore-summary-header"><strong>资源包已校验</strong><span id="resourceRestoreMode"></span></div>
@@ -419,14 +441,14 @@
     </div>
   </dialog>
 
-  <dialog id="vocabularyDialog" class="modal vocabulary-modal">
+  <dialog id="vocabularyDialog" class="modal vocabulary-modal" aria-labelledby="vocabularyDialogTitle">
     <div class="modal-header vocabulary-header">
-      <div><p class="eyebrow">WORD BOOK</p><h2>单词本 <span id="vocabularyTotal" class="vocabulary-total">0</span></h2></div>
-      <button class="icon-button modal-close" type="button" data-close-dialog="vocabularyDialog" aria-label="关闭" title="关闭">&times;</button>
+      <div><p class="eyebrow">WORDS WORTH KEEPING</p><h2 id="vocabularyDialogTitle">单词本 <span id="vocabularyTotal" class="vocabulary-total">0</span></h2></div>
+      <button class="icon-button modal-close" type="button" data-close-dialog="vocabularyDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     </div>
     <div class="vocabulary-toolbar">
       <div class="vocabulary-search">
-        <span aria-hidden="true">⌕</span>
+        <svg class="ui-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
         <input id="vocabularySearch" type="search" aria-label="搜索单词本" placeholder="搜索单词或释义" autocomplete="off">
       </div>
       <div id="vocabularyStatusFilter" class="segmented-control" role="group" aria-label="学习状态筛选">
@@ -447,15 +469,16 @@
     <div id="vocabularyList" class="vocabulary-list"></div>
     <div id="vocabularyEmpty" class="vocabulary-empty" hidden>
       <span aria-hidden="true">Aa</span>
-      <h3>单词本还是空的</h3>
+      <h3>收藏阅读中遇到的词汇</h3>
+      <p>选中摘要中的英文单词即可添加，也可以手动新增。</p>
     </div>
   </dialog>
 
-  <dialog id="vocabularyEditDialog" class="modal small-modal">
+  <dialog id="vocabularyEditDialog" class="modal small-modal" aria-labelledby="vocabularyFormTitle">
     <form id="vocabularyForm" method="dialog">
       <div class="modal-header">
         <div><p class="eyebrow">VOCABULARY ENTRY</p><h2 id="vocabularyFormTitle">编辑词条</h2></div>
-        <button class="icon-button modal-close" type="button" data-close-dialog="vocabularyEditDialog" aria-label="关闭" title="关闭">&times;</button>
+        <button class="icon-button modal-close" type="button" data-close-dialog="vocabularyEditDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
       <div class="modal-body">
         <div class="form-grid">
@@ -477,10 +500,10 @@
     </form>
   </dialog>
 
-  <dialog id="confirmDialog" class="modal confirm-modal">
+  <dialog id="confirmDialog" class="modal confirm-modal" aria-labelledby="confirmTitle">
     <div class="modal-header">
       <div><p class="eyebrow">CONFIRM ACTION</p><h2 id="confirmTitle">确认操作</h2></div>
-      <button class="icon-button modal-close" type="button" data-confirm-value="false" aria-label="关闭" title="关闭">&times;</button>
+      <button class="icon-button modal-close" type="button" data-confirm-value="false" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     </div>
     <div class="modal-body"><p id="confirmMessage" class="confirm-message"></p></div>
     <div class="modal-footer">
@@ -493,7 +516,7 @@
     <span class="spinner"></span><strong id="busyText">正在处理...</strong>
   </div>
   <div id="wordPopover" class="word-popover" role="dialog" aria-label="加入单词本" hidden>
-    <button id="closeWordPopover" class="word-popover-close" type="button" aria-label="关闭" title="关闭">&times;</button>
+    <button id="closeWordPopover" class="word-popover-close" type="button" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     <div class="word-popover-heading">
       <span id="wordPopoverTerm" class="word-popover-term"></span>
       <div class="word-popover-pronunciation">
@@ -518,7 +541,7 @@
   </div>
   <div id="summarySelectionToolbar" class="summary-selection-toolbar" role="toolbar" aria-label="摘要选区工具" hidden><button id="quoteSummarySelectionButton" type="button">❝ 引用到笔记</button></div>
   <div id="pdfAnnotationPopover" class="pdf-annotation-popover" role="dialog" aria-label="PDF 批注" hidden>
-    <button id="closeAnnotationPopover" class="pdf-annotation-close" type="button" aria-label="关闭" title="关闭">&times;</button>
+    <button id="closeAnnotationPopover" class="pdf-annotation-close" type="button" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     <strong class="pdf-annotation-title">高亮批注</strong>
     <p id="annotationSelectedText" class="pdf-annotation-quote"></p>
     <div id="annotationColors" class="annotation-colors" role="group" aria-label="高亮颜色">
@@ -533,19 +556,19 @@
       <button id="saveAnnotationButton" class="primary-button" type="button">保存</button>
     </div>
   </div>
-  <dialog id="doubaoImportDialog" class="modal medium-modal">
+  <dialog id="doubaoImportDialog" class="modal medium-modal" aria-labelledby="doubaoImportDialogTitle">
     <form id="doubaoImportForm" method="dialog">
       <div class="modal-header">
-        <div><p class="eyebrow">EXTERNAL REPORT</p><h2>导入豆包解析</h2></div>
-        <button class="icon-button modal-close" type="button" data-close-dialog="doubaoImportDialog" aria-label="关闭" title="关闭">&times;</button>
+        <div><p class="eyebrow">EXTERNAL REPORT</p><h2 id="doubaoImportDialogTitle">导入豆包解析</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="doubaoImportDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
       </div>
       <div class="modal-body">
         <p class="external-import-intro">粘贴豆包公开分享链接。中文原文会完整保留，英文版随后由当前模型生成。</p>
         <label class="field field-wide"><span>豆包分享链接</span><input name="url" type="url" required placeholder="https://www.doubao.com/thread/..." autocomplete="off"></label>
         <label class="import-preview-toggle"><input name="generate_english" type="checkbox" checked><span>同时生成英文版</span></label>
-        <p class="external-import-hint">支持标题、列表、表格、粗体和 LaTeX 公式；不要求 PDF 页码映射。</p>
+        <p class="external-import-hint">导入后保留原文的标题、列表、表格和公式，方便对照阅读。</p>
         <div id="doubaoImportProgress" class="doubao-import-progress" aria-live="polite" hidden>
-          <div class="doubao-progress-step" data-import-step="fetch"><span>1</span><div><strong>读取分享页</strong><small>连接豆包并提取原始 Markdown</small></div></div>
+          <div class="doubao-progress-step" data-import-step="fetch"><span>1</span><div><strong>读取分享页</strong><small>获取分享页中的解析内容</small></div></div>
           <div class="doubao-progress-step" data-import-step="parse"><span>2</span><div><strong>保存中文解析</strong><small>保留章节、表格和公式结构</small></div></div>
           <div class="doubao-progress-step" data-import-step="translate"><span>3</span><div><strong>生成英文版</strong><small>中文保存后将在阅读器中继续</small></div></div>
           <p id="doubaoImportProgressText">准备导入</p>

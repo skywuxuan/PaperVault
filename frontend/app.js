@@ -5,6 +5,8 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const state = {
   papers: [],
+  libraryRequestId: 0,
+  routeRequestId: 0,
   tags: [],
   settings: {},
   localConfig: { available: false, has_api_key: false, keys: [] },
@@ -19,8 +21,16 @@ const state = {
   batchRunning: false,
   currentPaper: null,
   activeSummarySource: "native",
+  activeSummaryVariantId: null,
+  editingPaper: null,
+  doubaoImportPaper: null,
   note: null,
   noteSaveTimer: null,
+  notePaperId: null,
+  noteRevision: 0,
+  noteDraft: null,
+  noteSaveQueue: Promise.resolve(),
+  noteSaving: false,
   summarySelection: null,
   readerMode: "deep",
   analysisRuns: [],
@@ -63,7 +73,7 @@ const state = {
 const statusLabels = {
   pending: "待生成",
   generating: "生成中",
-  ready: "AI 摘要",
+  ready: "摘要就绪",
   english_ready: "英文完成",
   translating: "中文翻译中",
   translation_error: "英文完成，中文翻译失败",
@@ -205,6 +215,7 @@ function tagChip(tag) {
 }
 
 async function loadLibrary() {
+  const requestId = ++state.libraryRequestId;
   const params = new URLSearchParams();
   if (state.query) params.set("q", state.query);
   if (state.tagId) params.set("tag", state.tagId);
@@ -212,6 +223,7 @@ async function loadLibrary() {
   if (state.ratingFilter !== "all") params.set("rating", state.ratingFilter);
   params.set("sort", state.librarySort);
   const data = await api(`/api/papers?${params}`);
+  if (requestId !== state.libraryRequestId) return;
   state.papers = data.papers;
   state.libraryFacets = data.facets || state.libraryFacets;
   renderLibrary();
@@ -316,6 +328,7 @@ function renderLibrary() {
       navigateToPaper(paper.id);
     });
     row.addEventListener("keydown", (event) => {
+      if (event.target !== row) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         navigateToPaper(paper.id);
@@ -342,18 +355,17 @@ function renderLibrary() {
       setPaperReadState(paper.id, paper.read_state === "read" ? "unread" : "read").catch(handleError);
     });
     titleLine.append(make("span", "paper-type-mark", "PDF"), make("h2", "paper-title", paper.title), readButton);
-    content.append(titleLine);
+    content.append(titleLine, make("p", "paper-authors", paperAuthorDetails(paper)));
     const details = make("details", "paper-details");
-    const detailsSummary = make("summary", "paper-details-toggle", "作者总结与简介");
+    const detailsSummary = make("summary", "paper-details-toggle", "摘要预览");
     const classification = make("span", "paper-tags paper-classification");
     paper.tags.forEach((tag) => classification.append(tagChip(tag)));
-    if (paper.tags.length) detailsSummary.append(classification);
     details.append(
       detailsSummary,
-      make("p", "paper-authors", paperAuthorDetails(paper)),
       make("p", "paper-snippet", paperSnippet(paper)),
     );
     content.append(details);
+    if (paper.tags.length) content.append(classification);
 
     const facts = make("div", "paper-facts");
     const statusLine = make("div", "paper-fact-line paper-status-line");
@@ -408,8 +420,8 @@ function renderLibrary() {
     const filtering = Boolean(
       state.query || state.tagId || state.summaryFilter !== "all" || state.ratingFilter !== "all"
     );
-    $("#emptyTitle").textContent = filtering ? "没有匹配的论文" : "还没有论文";
-    $("#emptyText").textContent = filtering ? "调整关键词或标签筛选后再试。" : "上传第一篇 PDF，建立你的本地研究资料库。";
+    $("#emptyTitle").textContent = filtering ? "没有匹配的论文" : "从第一篇论文开始";
+    $("#emptyText").textContent = filtering ? "试试其他关键词，或清除筛选条件。" : "导入 PDF，把摘要、批注和研究笔记整理在一起。";
     $("#emptyUploadButton").hidden = filtering;
   }
 }
@@ -657,7 +669,7 @@ function exportSelectedPapers(format) {
       if (paper.tags.length) lines.push(`标签：${paper.tags.map((tag) => `\`${tag.name}\``).join(" ")}`, "");
       if (paper.summary_blocks?.length) {
         lines.push("### 中文研究者摘要", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "zh", 1));
-        lines.push("", "### English Researcher Brief", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "en", 1));
+        lines.push("", "### English Research Summary", "", ...summaryBlocksToMarkdown(paper.summary_blocks, "en", 1));
       } else {
         lines.push("### 中文摘要", "");
         lines.push(...(paper.summary_pairs || []).map((pair) => `- ${pair.zh || pair.en}`).filter((line) => line !== "- "));
@@ -824,6 +836,7 @@ async function inspectResourcePackageUpload(file) {
       body: file,
     });
     const data = await response.json().catch(() => ({}));
+    if (state.resourcePackageFile !== file) return;
     if (!response.ok) throw new Error(data.error || `资源包校验失败 (${response.status})`);
     state.resourcePackageId = data.package_id;
     state.resourcePackageManifest = data.manifest;
@@ -831,6 +844,7 @@ async function inspectResourcePackageUpload(file) {
     $("#resourceRestoreFileMeta").textContent = `${formatBytes(file.size)} · 校验通过，仅保存在本机待确认`;
     setResourcePackageProgress("restore", "校验通过，确认后即可替换当前论文库。", false);
   } catch (error) {
+    if (state.resourcePackageFile !== file) return;
     $("#resourceRestoreFileMeta").textContent = "校验失败，请选择其他资源包";
     setResourcePackageProgress("restore", error.message || "资源包校验失败", true);
     handleError(error);
@@ -1168,9 +1182,31 @@ function navigateToPaper(paperId) {
 }
 
 async function handleRoute() {
+  const requestId = ++state.routeRequestId;
+  try {
+    do {
+      await flushNoteSave();
+    } while (state.noteDraft && requestId === state.routeRequestId);
+  } catch (error) {
+    if (requestId !== state.routeRequestId) return;
+    handleError(error);
+    if (state.currentPaper) location.hash = `paper/${state.currentPaper.id}`;
+    return;
+  }
+  if (requestId !== state.routeRequestId) return;
   closeWordPopover();
+  closeNotesDrawer();
   stopAnalysisPolling();
   const match = location.hash.match(/^#paper\/([0-9a-f-]+)$/);
+  if (state.notePaperId !== match?.[1]) {
+    state.note = null;
+    state.notePaperId = null;
+    $("#noteTitleInput").value = "";
+    $("#noteBodyInput").value = "";
+    $("#noteTitleInput").disabled = true;
+    $("#noteBodyInput").disabled = true;
+    $("#noteSaveState").textContent = "";
+  }
   document.body.classList.toggle("reader-page", Boolean(match));
   if (!match) {
     state.currentPaper = null;
@@ -1182,7 +1218,9 @@ async function handleRoute() {
     return;
   }
   try {
+    if (state.currentPaper?.id !== match[1]) state.currentPaper = null;
     const data = await api(`/api/papers/${match[1]}`);
+    if (requestId !== state.routeRequestId) return;
     state.currentPaper = data.paper;
     state.analysisRuns = [];
     state.analysisJobs = [];
@@ -1197,6 +1235,7 @@ async function handleRoute() {
       setPaperReadState(data.paper.id, "read", false).catch(handleError);
     }
   } catch (error) {
+    if (requestId !== state.routeRequestId) return;
     toast(error.message, "error");
     location.hash = "";
   }
@@ -1601,6 +1640,7 @@ async function createPdfAnnotation(openEditor = false) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...selection, color: "yellow", note: "" }),
   });
+  if (state.currentPaper?.id !== paper.id) return;
   state.pdfAnnotations.push(result.annotation);
   const layer = $(`.pdf-page[data-page="${selection.page}"] .pdf-text-layer`, $("#pdfViewer"));
   if (layer) applyPdfAnnotations(selection.page, layer);
@@ -1612,12 +1652,14 @@ async function createPdfAnnotation(openEditor = false) {
 }
 
 async function removePdfSelectionHighlights() {
+  const paperId = state.currentPaper?.id;
   const selection = state.pdfSelection;
   const annotations = annotationsForPdfSelection(selection);
   if (!selection || !annotations.length) return;
   await Promise.all(annotations.map((annotation) => (
     api(`/api/annotations/${annotation.id}`, { method: "DELETE" })
   )));
+  if (state.currentPaper?.id !== paperId) return;
   const removedIds = new Set(annotations.map((annotation) => annotation.id));
   state.pdfAnnotations = state.pdfAnnotations.filter((annotation) => !removedIds.has(annotation.id));
   const layer = $(`.pdf-page[data-page="${selection.page}"] .pdf-text-layer`, $("#pdfViewer"));
@@ -1666,6 +1708,7 @@ function closeAnnotationPopover() {
 }
 
 async function saveAnnotation() {
+  const paperId = state.currentPaper?.id;
   const annotationId = state.editingAnnotationId;
   if (!annotationId) return;
   const result = await api(`/api/annotations/${annotationId}`, {
@@ -1676,20 +1719,23 @@ async function saveAnnotation() {
       color: state.editingAnnotationColor,
     }),
   });
+  if (state.currentPaper?.id !== paperId) return;
   const index = state.pdfAnnotations.findIndex((item) => item.id === annotationId);
   if (index >= 0) state.pdfAnnotations[index] = result.annotation;
   const layer = $(`.pdf-page[data-page="${result.annotation.page}"] .pdf-text-layer`, $("#pdfViewer"));
   if (layer) applyPdfAnnotations(Number(result.annotation.page), layer);
   renderNotesPanel();
-  closeAnnotationPopover();
+  if (state.editingAnnotationId === annotationId) closeAnnotationPopover();
   toast("批注已保存");
 }
 
 async function deleteAnnotation() {
+  const paperId = state.currentPaper?.id;
   const annotationId = state.editingAnnotationId;
   if (!annotationId) return;
   const annotation = state.pdfAnnotations.find((item) => item.id === annotationId);
   await api(`/api/annotations/${annotationId}`, { method: "DELETE" });
+  if (state.currentPaper?.id !== paperId) return;
   state.pdfAnnotations = state.pdfAnnotations.filter((item) => item.id !== annotationId);
   if (annotation) {
     const layer = $(`.pdf-page[data-page="${annotation.page}"] .pdf-text-layer`, $("#pdfViewer"));
@@ -1697,7 +1743,7 @@ async function deleteAnnotation() {
   }
   updateAnnotationCount();
   renderNotesPanel();
-  closeAnnotationPopover();
+  if (state.editingAnnotationId === annotationId) closeAnnotationPopover();
   toast("高亮已取消");
 }
 
@@ -1707,6 +1753,7 @@ function updateAnnotationCount() {
 
 function goToPdfPage(pageNumber) {
   if (!state.pdfPageCount) return;
+  if (state.panelCollapsed.pdf) togglePanel("pdf");
   const page = Math.max(1, Math.min(state.pdfPageCount, Number(pageNumber) || 1));
   const shell = $(`.pdf-page[data-page="${page}"]`, $("#pdfViewer"));
   if (!shell) return;
@@ -1801,7 +1848,7 @@ function renderReader() {
     : "生成中文翻译";
   renderSummarySourceControls();
   renderActiveSummarySource();
-  loadPaperNote(paper.id).catch(handleError);
+  if (state.notePaperId !== paper.id) loadPaperNote(paper.id).catch(handleError);
   renderNotesPanel();
   setReaderMode(state.readerMode);
 }
@@ -1809,6 +1856,9 @@ function renderReader() {
 function renderSummarySourceControls() {
   const variants = state.currentPaper?.summary_variants || [];
   const hasDoubao = variants.some((variant) => variant.provider === "doubao");
+  if (!variants.some((variant) => variant.provider === "doubao" && variant.id === state.activeSummaryVariantId)) {
+    state.activeSummaryVariantId = null;
+  }
   if (!hasDoubao && state.activeSummarySource === "doubao") state.activeSummarySource = "native";
   $$('[data-summary-source]').forEach((button) => {
     button.hidden = button.dataset.summarySource === "doubao" && !hasDoubao;
@@ -1817,10 +1867,12 @@ function renderSummarySourceControls() {
 }
 
 function currentDoubaoVariant() {
-  return (state.currentPaper?.summary_variants || []).find((variant) => variant.provider === "doubao") || null;
+  const variants = (state.currentPaper?.summary_variants || []).filter((variant) => variant.provider === "doubao");
+  return variants.find((variant) => variant.id === state.activeSummaryVariantId) || variants[0] || null;
 }
 
 function renderActiveSummarySource() {
+  closeSummarySelectionToolbar();
   const variant = currentDoubaoVariant();
   if (state.activeSummarySource !== "doubao" || !variant) {
     const paper = state.currentPaper;
@@ -1839,6 +1891,7 @@ function renderActiveSummarySource() {
         ? `英文分析：${paper.summary_analysis_model || paper.summary_model || "未记录"}；中文翻译：${paper.summary_translation_model || "未记录"}`
         : `摘要来源：${summarySource(paper)}（未调用外部模型）`;
       const usesBlocks = Boolean(paper.summary_blocks?.length);
+      $("#translateSummaryButton").hidden = !usesBlocks || paper.summary_translation_status === "ready";
       $("#termLinkLabel b").textContent = usesBlocks ? "段落联动" : "句对联动";
       $("#termLinkLabel").title = usesBlocks
         ? "单击任一侧段落可将对应译文对齐到相同高度"
@@ -1846,6 +1899,7 @@ function renderActiveSummarySource() {
     }
     return;
   }
+  $("#translateSummaryButton").hidden = true;
   renderExternalSummary(variant);
 }
 
@@ -1883,6 +1937,7 @@ function renderExternalSummary(variant) {
   const statusLabels = { ready: "豆包 · 双语", generating: "豆包 · 英文生成中", pending: "豆包 · 中文已保存", error: "豆包 · 英文失败" };
   $("#summaryStatus").textContent = statusLabels[variant.english_status] || "豆包解析";
   $("#summaryStatus").className = `status-pill ${variant.english_status === "generating" ? "translating" : variant.english_status === "error" ? "error" : "ready"}`;
+  $("#summaryStatus").title = variant.title || "豆包论文解析";
   $("#termLinkLabel b").textContent = "外部解析";
 }
 
@@ -1893,20 +1948,34 @@ function externalVariantError(variant) {
     : error;
 }
 
-async function retryExternalEnglish(variantId) {
-  const variant = currentDoubaoVariant();
-  if (!variant || variant.id !== variantId) return;
+function cacheSummaryVariant(paper, variant) {
+  const targets = new Set([paper, state.papers.find((item) => item.id === paper.id)]);
+  if (state.currentPaper?.id === paper.id) targets.add(state.currentPaper);
+  for (const target of targets) {
+    if (!target) continue;
+    const variants = target.summary_variants || [];
+    target.summary_variants = variants.some((item) => item.id === variant.id)
+      ? variants.map((item) => item.id === variant.id ? variant : item)
+      : [variant, ...variants];
+  }
+}
+
+async function retryExternalEnglish(variantId, paper = state.currentPaper) {
+  const variant = paper?.summary_variants?.find((item) => item.id === variantId);
+  if (!variant || variant.english_status === "generating") return;
   variant.english_status = "generating";
-  renderExternalSummary(variant);
+  cacheSummaryVariant(paper, variant);
+  if (state.currentPaper?.id === paper.id) renderActiveSummarySource();
   try {
     const result = await api(`/api/summary-variants/${variantId}/translate-english`, { method: "POST" });
-    state.currentPaper.summary_variants = (state.currentPaper.summary_variants || []).map((item) => item.id === variantId ? result.variant : item);
-    renderExternalSummary(result.variant);
+    cacheSummaryVariant(paper, result.variant);
+    if (state.currentPaper?.id === paper.id) renderActiveSummarySource();
     toast("豆包英文版已生成");
   } catch (error) {
     variant.english_status = "error";
     variant.error = error.message || "英文版生成失败";
-    renderExternalSummary(variant);
+    cacheSummaryVariant(paper, variant);
+    if (state.currentPaper?.id === paper.id) renderActiveSummarySource();
     handleError(error);
   }
 }
@@ -2029,6 +2098,7 @@ function renderExternalTable(lines) {
 }
 
 function showDoubaoImportDialog() {
+  state.doubaoImportPaper = state.currentPaper;
   const form = $("#doubaoImportForm");
   form.elements.url.disabled = false;
   form.elements.generate_english.disabled = false;
@@ -2061,7 +2131,8 @@ function setDoubaoImportLocked(locked) {
 
 async function importDoubaoSummary(event) {
   event.preventDefault();
-  if (!state.currentPaper) return;
+  const paper = state.doubaoImportPaper || state.currentPaper;
+  if (!paper) return;
   const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
   const generateEnglish = event.currentTarget.elements.generate_english.checked;
   payload.generate_english = false;
@@ -2072,24 +2143,25 @@ async function importDoubaoSummary(event) {
     $("#doubaoImportProgressText").textContent = "分享页响应较慢，仍在提取原始 Markdown…";
   }, 4500);
   try {
-    const result = await api(`/api/papers/${state.currentPaper.id}/summary-variants`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const result = await api(`/api/papers/${paper.id}/summary-variants`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     window.clearTimeout(slowHint);
     setDoubaoImportProgress("parse", "中文解析已提取，正在写入本地论文库…");
-    state.currentPaper.summary_variants = [result.variant, ...(state.currentPaper.summary_variants || []).filter((item) => item.id !== result.variant.id)];
-    state.activeSummarySource = "doubao";
-    renderSummarySourceControls();
-    renderActiveSummarySource();
+    cacheSummaryVariant(paper, result.variant);
+    if (state.currentPaper?.id === paper.id) {
+      state.activeSummarySource = "doubao";
+      state.activeSummaryVariantId = result.variant.id;
+      renderSummarySourceControls();
+      renderActiveSummarySource();
+    }
     if (!generateEnglish) {
       closeDialog("doubaoImportDialog");
       toast("豆包中文解析已导入");
       return;
     }
     setDoubaoImportProgress("translate", "中文解析已可阅读，英文版将在阅读器中继续生成。你可以继续浏览。 ");
-    result.variant.english_status = "generating";
-    renderActiveSummarySource();
     closeDialog("doubaoImportDialog");
     toast("中文解析已导入，正在生成英文版");
-    await retryExternalEnglish(result.variant.id);
+    await retryExternalEnglish(result.variant.id, paper);
   } catch (error) {
     window.clearTimeout(slowHint);
     setDoubaoImportProgress("fetch", error.message || "导入失败，请检查链接后重试");
@@ -2101,9 +2173,15 @@ async function importDoubaoSummary(event) {
 }
 
 async function loadPaperNote(paperId) {
+  await state.noteSaveQueue.catch(() => {});
+  const revision = state.noteRevision;
   const data = await api(`/api/papers/${paperId}/notes`);
-  if (state.currentPaper?.id !== paperId) return;
+  if (state.currentPaper?.id !== paperId || revision !== state.noteRevision) return;
   state.note = data.note;
+  state.notePaperId = paperId;
+  $("#noteTitleInput").disabled = false;
+  $("#noteBodyInput").disabled = false;
+  $("#noteSaveState").textContent = "已保存";
   renderNoteDrawer();
 }
 
@@ -2151,15 +2229,35 @@ function jumpToNoteQuote(quote) {
     goToPdfPage(locator.page);
     return;
   }
+  if (!/^(native|doubao)_(en|zh)$/.test(quote.source_type)) return;
+  const source = quote.source_type.startsWith("doubao_") ? "doubao" : "native";
+  if (source === "doubao") {
+    const variants = (state.currentPaper?.summary_variants || []).filter((variant) => variant.provider === "doubao");
+    const variant = quote.source_variant_id
+      ? variants.find((item) => item.id === quote.source_variant_id)
+      : variants[0];
+    if (!variant) {
+      toast("这条引用对应的豆包解析已不可用", "error");
+      return;
+    }
+    state.activeSummaryVariantId = variant.id;
+  }
+  state.activeSummarySource = source;
+  renderSummarySourceControls();
+  renderActiveSummarySource();
   const language = quote.source_type.endsWith("_en") ? "en" : "zh";
+  const panel = language === "en" ? "english" : "chinese";
+  if (state.panelCollapsed[panel]) togglePanel(panel);
   const container = language === "en" ? $("#englishSummary") : $("#chineseSummary");
-  const target = $$(".structured-block, .structured-paragraph, .structured-bullet, p, li", container)
+  const target = $$(".structured-block, .structured-paragraph, .structured-bullet, p, li, h1, h2, h3, h4, h5, h6", container)
     .find((node) => node.textContent.includes(quote.quote_text.slice(0, 80)));
   if (target) {
     closeNotesDrawer();
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     target.classList.add("note-quote-target");
     window.setTimeout(() => target.classList.remove("note-quote-target"), 1500);
+  } else {
+    toast("已打开引用来源，原文可能已更新，请在摘要中查找", "error");
   }
 }
 
@@ -2169,23 +2267,54 @@ function noteSourceLabel(quote) {
 }
 
 function queueNoteSave() {
-  if (!state.note || !state.currentPaper) return;
+  if (!state.note || state.notePaperId !== state.currentPaper?.id) return;
   window.clearTimeout(state.noteSaveTimer);
+  const payload = { title: $("#noteTitleInput").value, body: $("#noteBodyInput").value };
+  state.note = { ...state.note, ...payload };
+  state.noteDraft = { paperId: state.currentPaper.id, revision: ++state.noteRevision, payload };
   $("#noteSaveState").textContent = "正在保存…";
-  state.noteSaveTimer = window.setTimeout(async () => {
+  state.noteSaveTimer = window.setTimeout(() => flushNoteSave().catch(handleError), 450);
+}
+
+function flushNoteSave({ keepalive = false } = {}) {
+  window.clearTimeout(state.noteSaveTimer);
+  state.noteSaveTimer = null;
+  const draft = state.noteDraft;
+  if (!draft) return state.noteSaveQueue;
+  state.noteDraft = null;
+  state.noteSaveQueue = state.noteSaveQueue.catch(() => {}).then(async () => {
+    state.noteSaving = true;
     try {
-      const result = await api(`/api/papers/${state.currentPaper.id}/notes`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: $("#noteTitleInput").value, body: $("#noteBodyInput").value }) });
-      state.note = result.note;
-      $("#noteSaveState").textContent = "已保存";
-    } catch (error) { $("#noteSaveState").textContent = "保存失败"; handleError(error); }
-  }, 450);
+      const result = await api(`/api/papers/${draft.paperId}/notes`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft.payload), keepalive,
+      });
+      if (state.notePaperId === draft.paperId && state.noteRevision === draft.revision) {
+        state.note = result.note;
+        $("#noteSaveState").textContent = "已保存";
+      }
+    } catch (error) {
+      if (state.notePaperId === draft.paperId && state.noteRevision === draft.revision) {
+        state.noteDraft = draft;
+        $("#noteSaveState").textContent = "保存失败，请重试";
+      }
+      throw error;
+    } finally {
+      state.noteSaving = false;
+    }
+  });
+  return state.noteSaveQueue;
 }
 
 async function addNoteQuote(quote) {
   if (!state.currentPaper || !quote?.quote_text?.trim()) return;
+  const paperId = state.currentPaper.id;
   try {
-    const result = await api(`/api/papers/${state.currentPaper.id}/notes/quotes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(quote) });
-    state.note = result.note;
+    await flushNoteSave();
+    const result = await api(`/api/papers/${paperId}/notes/quotes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(quote) });
+    if (state.currentPaper?.id !== paperId) return;
+    state.note = { ...result.note, ...(state.note ? { title: state.note.title, body: state.note.body } : {}) };
+    state.notePaperId = paperId;
     renderNoteDrawer();
     openNotesDrawer();
     toast("引用已加入笔记");
@@ -2193,7 +2322,14 @@ async function addNoteQuote(quote) {
 }
 
 async function deleteNoteQuote(quoteId) {
-  try { await api(`/api/note-quotes/${quoteId}`, { method: "DELETE" }); state.note.quotes = (state.note.quotes || []).filter((quote) => quote.id !== quoteId); renderNoteDrawer(); } catch (error) { handleError(error); }
+  const paperId = state.currentPaper?.id;
+  try {
+    await flushNoteSave();
+    await api(`/api/note-quotes/${quoteId}`, { method: "DELETE" });
+    if (state.notePaperId !== paperId || !state.note) return;
+    state.note.quotes = (state.note.quotes || []).filter((quote) => quote.id !== quoteId);
+    renderNoteDrawer();
+  } catch (error) { handleError(error); }
 }
 
 function addSelectedSummaryQuote() {
@@ -2480,7 +2616,7 @@ function renderStructuredReport(container, blocks, language) {
     make(
       "h1",
       "markdown-document-title",
-      language === "zh" ? "论文研究者摘要" : "Researcher Brief",
+      language === "zh" ? "论文解读" : "Research Summary",
     ),
   );
   const reportTitle = state.currentPaper?.summary_paper_title || state.currentPaper?.title;
@@ -2579,7 +2715,7 @@ function renderMarkdownReport(container, pairs, language, visualAssets = [], pap
   const heading = make("header", "markdown-document-heading");
   heading.append(
     make("p", "markdown-document-kicker", language === "zh" ? "PAPER REPORT" : "RESEARCH NOTES"),
-    make("h1", "markdown-document-title", language === "zh" ? "论文研究者摘要" : "Researcher Brief"),
+    make("h1", "markdown-document-title", language === "zh" ? "论文解读" : "Research Summary"),
   );
   if (state.currentPaper?.title) {
     heading.append(make("p", "markdown-document-subtitle", state.currentPaper.title));
@@ -2870,13 +3006,30 @@ window.addEventListener("load", () => {
 
 function downloadSummaryMarkdown() {
   const paper = state.currentPaper;
+  if (state.activeSummarySource === "doubao") {
+    const variant = currentDoubaoVariant();
+    if (!variant?.content_markdown?.trim() && !variant?.english_markdown?.trim()) {
+      toast("当前没有可导出的豆包解析", "error");
+      return;
+    }
+    const lines = ["# 豆包论文解析", "", `> 论文：${variant.title || paper.title}`, "", variant.content_markdown || ""];
+    if (variant.english_markdown?.trim()) {
+      lines.push("", "---", "", "# English Research Summary", "", variant.english_markdown);
+    }
+    downloadTextFile(
+      `${paper.title.replace(/[\\/:*?"<>|]+/g, "-").slice(0, 120)}-豆包解析.md`,
+      `${lines.join("\n")}\n`,
+      "text/markdown;charset=utf-8",
+    );
+    return;
+  }
   if (!paper?.summary_blocks?.length && !paper?.summary_pairs?.length) {
     toast("当前没有可导出的摘要", "error");
     return;
   }
   if (paper.summary_blocks?.length) {
     const lines = [
-      "# 论文研究者摘要",
+      "# 论文解读",
       "",
       `> 论文：${paper.summary_paper_title || paper.title}`,
       "",
@@ -2884,7 +3037,7 @@ function downloadSummaryMarkdown() {
       "",
       "---",
       "",
-      "# English Researcher Brief",
+      "# English Research Summary",
       "",
       ...summaryBlocksToMarkdown(paper.summary_blocks, "en"),
     ];
@@ -2895,7 +3048,7 @@ function downloadSummaryMarkdown() {
     );
     return;
   }
-  const lines = ["# 论文研究者摘要", "", `> 论文：${paper.title}`, ""];
+  const lines = ["# 论文解读", "", `> 论文：${paper.title}`, ""];
   let lastSection = "";
   let sectionIndex = 0;
   let itemIndex = 0;
@@ -3152,6 +3305,7 @@ function showUploadDialog() {
 
 function showEditDialog() {
   const paper = state.currentPaper;
+  state.editingPaper = paper;
   if (!paper) return;
   const form = $("#editForm");
   form.elements.title.value = paper.title || "";
@@ -3173,9 +3327,10 @@ function showEditDialog() {
 
 function updateProviderHint() {
   const remote = state.settings.provider === "openai_compatible";
+  $("#uploadSummaryLabel").textContent = remote ? "导入后生成双语摘要" : "导入后建立内容索引";
   $("#uploadProviderHint").textContent = remote
     ? `${state.settings.analysis_model || state.settings.model || "OpenAI 兼容模型"}`
-    : "本地结构索引（非机器翻译）";
+    : "在本机提取章节与关键内容";
 }
 
 function showSettingsDialog() {
@@ -3394,7 +3549,7 @@ async function handleUpload(event) {
 
 async function handleEdit(event) {
   event.preventDefault();
-  const paper = state.currentPaper;
+  const paper = state.editingPaper || state.currentPaper;
   if (!paper) return;
   const form = event.currentTarget;
   const payload = {
@@ -3409,7 +3564,7 @@ async function handleEdit(event) {
     const chinese = form.elements.summary_zh.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     const count = Math.max(english.length, chinese.length);
     payload.summary_pairs = Array.from({ length: count }, (_, index) => ({
-      ...(paper.summary_pairs[index] || {}),
+      ...(paper.summary_pairs?.[index] || {}),
       en: english[index] || "",
       zh: chinese[index] || "",
     }));
@@ -3420,9 +3575,9 @@ async function handleEdit(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    state.currentPaper = result.paper;
-    renderReader();
-    closeDialog("editDialog");
+    cacheUpdatedPaper(result.paper);
+    if (state.currentPaper?.id === paper.id) renderReader();
+    if (!state.editingPaper || state.editingPaper.id === paper.id) closeDialog("editDialog");
     await Promise.all([loadLibrary(), loadTags()]);
     toast("论文信息已更新");
   } catch (error) {
@@ -3435,22 +3590,22 @@ async function regenerateSummary() {
   if (!paper) return;
   if (state.settings.provider !== "openai_compatible") {
     showSettingsDialog();
-    toast("双语研究者摘要需要先配置 OpenAI 兼容模型", "error");
+    toast("双语研究摘要需要先配置 OpenAI 兼容模型", "error");
     return;
   }
-  setBusy(true, "模型正在通读全文并撰写英文研究者摘要...");
+  setBusy(true, "模型正在通读全文并撰写英文研究摘要...");
   try {
     const result = await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
-    state.currentPaper = result.paper;
-    renderReader();
+    cacheUpdatedPaper(result.paper);
+    if (state.currentPaper?.id === paper.id) renderReader();
     await loadLibrary();
     setBusy(false);
-    toast("英文研究者摘要已完成，正在生成中文翻译");
-    await retrySummaryTranslation({ quietStart: true });
+    toast("英文研究摘要已完成，正在生成中文翻译");
+    await retrySummaryTranslation({ quietStart: true, paper: result.paper });
   } catch (error) {
     if (error.data?.paper) {
-      state.currentPaper = error.data.paper;
-      renderReader();
+      cacheUpdatedPaper(error.data.paper);
+      if (state.currentPaper?.id === paper.id) renderReader();
     }
     handleError(error);
   } finally {
@@ -3494,7 +3649,7 @@ async function retryFailedPaperSummary(paper) {
       result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
     }
     cacheUpdatedPaper(result.paper);
-    toast(translationOnly ? "中文翻译已完成" : "双语研究者摘要已重新生成");
+    toast(translationOnly ? "中文翻译已完成" : "双语研究摘要已重新生成");
   } catch (error) {
     if (error.data?.paper) cacheUpdatedPaper(error.data.paper);
     handleError(error);
@@ -3504,27 +3659,26 @@ async function retryFailedPaperSummary(paper) {
   }
 }
 
-async function retrySummaryTranslation({ quietStart = false } = {}) {
-  const paper = state.currentPaper;
+async function retrySummaryTranslation({ quietStart = false, paper = state.currentPaper } = {}) {
   if (!paper?.summary_blocks?.length || paper.summary_status === "translating") return;
-  state.currentPaper = {
+  cacheUpdatedPaper({
     ...paper,
     summary_status: "translating",
     summary_translation_status: "translating",
     summary_translation_error: "",
-  };
-  renderReader();
+  });
+  if (state.currentPaper?.id === paper.id) renderReader();
   if (!quietStart) toast("正在重新生成中文翻译");
   try {
     const result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
-    state.currentPaper = result.paper;
-    renderReader();
+    cacheUpdatedPaper(result.paper);
+    if (state.currentPaper?.id === paper.id) renderReader();
     await loadLibrary();
     toast("中文翻译已完成");
   } catch (error) {
     if (error.data?.paper) {
-      state.currentPaper = error.data.paper;
-      renderReader();
+      cacheUpdatedPaper(error.data.paper);
+      if (state.currentPaper?.id === paper.id) renderReader();
       await loadLibrary().catch(() => {});
     }
     handleError(error);
@@ -3599,7 +3753,10 @@ async function deleteTag(tag) {
 
 async function refreshCurrentPaper() {
   if (!state.currentPaper) return;
-  const data = await api(`/api/papers/${state.currentPaper.id}`);
+  const paperId = state.currentPaper.id;
+  const requestId = state.routeRequestId;
+  const data = await api(`/api/papers/${paperId}`);
+  if (state.currentPaper?.id !== paperId || state.routeRequestId !== requestId) return;
   state.currentPaper = data.paper;
   renderReader();
 }
@@ -3720,14 +3877,14 @@ function updatePanelLayout() {
     schedulePdfResolutionRefresh();
     return;
   }
-  const labels = { pdf: "原始论文", english: "英文摘要", chinese: "中文摘要" };
+  const labels = { pdf: "论文原文", english: "英文摘要", chinese: "中文摘要" };
   const compact = window.innerWidth <= 760;
   const medium = window.innerWidth <= 1080;
   const expandedTracks = compact
-    ? { pdf: "92vw", english: "84vw", chinese: "84vw" }
+    ? { pdf: "90vw", english: "86vw", chinese: "86vw" }
     : medium
-      ? { pdf: "minmax(330px, 1fr)", english: "minmax(280px, .82fr)", chinese: "minmax(280px, .82fr)" }
-      : { pdf: "minmax(360px, 1.16fr)", english: "minmax(300px, .92fr)", chinese: "minmax(300px, .92fr)" };
+      ? { pdf: "minmax(330px, 1fr)", english: "minmax(320px, .82fr)", chinese: "minmax(320px, .82fr)" }
+      : { pdf: "minmax(360px, 1.16fr)", english: "minmax(320px, .92fr)", chinese: "minmax(320px, .92fr)" };
   const tracks = ["pdf", "english", "chinese"].map((name) => (
     state.panelCollapsed[name] ? "44px" : expandedTracks[name]
   ));
@@ -3990,6 +4147,13 @@ function bindEvents() {
   });
   $("#englishSummary").addEventListener("scroll", closeWordPopover);
   window.addEventListener("hashchange", handleRoute);
+  window.addEventListener("beforeunload", (event) => {
+    if (state.noteDraft || state.noteSaving) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  });
+  window.addEventListener("pagehide", () => flushNoteSave({ keepalive: true }).catch(() => {}));
 }
 
 async function init() {
@@ -3999,11 +4163,7 @@ async function init() {
     await Promise.all([loadTags(), loadSettings()]);
     await loadLibrary();
     await handleRoute();
-    const importedLocalSettings = await bootstrapLocalSettings();
-    if (!state.settings.api_key && !importedLocalSettings) {
-      showSettingsDialog();
-      toast("请先配置模型 API 和 Key，或从本地配置文件导入", "error");
-    }
+    // Local indexing works immediately; model settings remain an explicit action.
   } catch (error) {
     handleError(error);
   }

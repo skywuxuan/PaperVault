@@ -7,10 +7,8 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSET_DIR = ROOT / "desktop" / "assets"
-INK = "#17201e"
 PAPER = "#ffffff"
-TEAL = "#1f887d"
-TEAL_DARK = "#176d65"
+ACCENT = "#6853d8"
 
 
 def draw_icon(size: int) -> Image.Image:
@@ -26,27 +24,29 @@ def draw_icon(size: int) -> Image.Image:
     draw.rounded_rectangle(
         (margin, margin, size - margin, size - margin),
         radius=radius,
-        fill=INK,
+        fill=ACCENT,
     )
-    document = box((148, 104, 370, 408))
-    draw.rounded_rectangle(document, radius=round(24 * scale), fill=PAPER)
-    draw.polygon(
-        [
-            (round(300 * scale), round(104 * scale)),
-            (round(370 * scale), round(174 * scale)),
-            (round(300 * scale), round(174 * scale)),
-        ],
-        fill="#dce3e0",
-    )
-    draw.rounded_rectangle(box((185, 218, 334, 240)), radius=round(11 * scale), fill=TEAL)
-    draw.rounded_rectangle(box((185, 264, 315, 286)), radius=round(11 * scale), fill=TEAL_DARK)
-    draw.rounded_rectangle(box((185, 310, 282, 332)), radius=round(11 * scale), fill="#34618d")
+    # Use the same open-book mark as the shared Web/desktop interface.
+    stroke = max(1, round(17 * scale))
+    def line(points: list[tuple[int, int]]) -> None:
+        draw.line([(round(x * scale), round(y * scale)) for x, y in points],
+                  fill=PAPER, width=stroke, joint="curve")
+
+    line([(128, 140), (218, 140), (240, 146), (256, 158),
+          (272, 146), (294, 140), (384, 140), (384, 362),
+          (294, 362), (272, 368), (256, 380), (240, 368),
+          (218, 362), (128, 362), (128, 140)])
+    line([(256, 158), (256, 380)])
+    for x in (174, 302):
+        for y in (203, 252):
+            draw.rounded_rectangle(box((x, y, x + 38, y + 14)),
+                                   radius=round(7 * scale), fill=PAPER)
     return image
 
 
 def main() -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
-    base = draw_icon(512)
+    base = draw_icon(1024).resize((512, 512), Image.Resampling.LANCZOS)
     base.save(ASSET_DIR / "papervault.png", optimize=True)
     base.save(
         ASSET_DIR / "papervault.ico",

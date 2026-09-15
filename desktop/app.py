@@ -65,6 +65,63 @@ class DesktopBridge:
         }
 
 
+class DesktopCloseGuard:
+    """Keep the native window alive until the current note is safely saved."""
+
+    SAVE_SCRIPT = """
+        (async () => {
+            if (typeof flushNoteSave !== 'function') return true;
+            const fields = ['noteTitleInput', 'noteBodyInput'].map(id => document.getElementById(id)).filter(Boolean);
+            const disabled = fields.map(field => field.disabled);
+            fields.forEach(field => { field.disabled = true; });
+            try {
+                if (typeof setBusy === 'function') setBusy(true, '正在保存笔记，完成后关闭…');
+                do { await flushNoteSave(); } while (state.noteDraft);
+                return true;
+            } catch (error) {
+                fields.forEach((field, index) => { field.disabled = disabled[index]; });
+                if (typeof setBusy === 'function') setBusy(false);
+                if (typeof handleError === 'function') handleError(error);
+                return false;
+            }
+        })()
+    """
+
+    def __init__(self, window: Any):
+        self.window = window
+        self._approved = False
+        self._pending = False
+        self._lock = threading.Lock()
+
+    def request_close(self) -> bool:
+        with self._lock:
+            if self._approved or not self.window.events.loaded.is_set():
+                return True
+            if not self._pending:
+                self._pending = True
+                threading.Thread(target=self._save, name="papervault-save-on-close", daemon=True).start()
+        # The native UI thread must remain free to evaluate JavaScript and send
+        # the save request. The completion callback closes the window later.
+        return False
+
+    def _save(self) -> None:
+        try:
+            self.window.evaluate_js(self.SAVE_SCRIPT, callback=self._saved)
+        except Exception:
+            # Preserve the window and allow a later close attempt after a
+            # temporary WebView error; never discard a note on an eval failure.
+            with self._lock:
+                self._pending = False
+
+    def _saved(self, success: Any) -> None:
+        with self._lock:
+            self._pending = False
+            if success is not True:
+                return
+            self._approved = True
+        self.window.destroy()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PaperVault desktop application")
     parser.add_argument("--data-dir", type=Path, default=None)
@@ -108,16 +165,18 @@ def run_desktop(argv: Sequence[str] | None = None) -> int:
         webview.settings["ALLOW_DOWNLOADS"] = True
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         window = webview.create_window(
-            WINDOW_TITLE,
+            f"{WINDOW_TITLE} · {__version__}",
             runtime.url,
             js_api=DesktopBridge(platform),
             width=WINDOW_SIZE[0],
             height=WINDOW_SIZE[1],
             min_size=WINDOW_MIN_SIZE,
             resizable=True,
-            background_color="#f4f6f5",
+            background_color="#f6f6fa",
             text_select=True,
         )
+        close_guard = DesktopCloseGuard(window)
+        window.events.closing += close_guard.request_close
         window.events.closed += runtime.stop
         webview.start(
             gui=platform.renderer,

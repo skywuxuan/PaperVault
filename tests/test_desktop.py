@@ -4,10 +4,11 @@ import http.client
 import json
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 from backend import __version__
-from desktop.app import BackendRuntime, DesktopBridge, build_parser
+from desktop.app import BackendRuntime, DesktopBridge, DesktopCloseGuard, build_parser
 from desktop.platforms import (
     configured_data_dir,
     default_data_dir,
@@ -18,6 +19,45 @@ from desktop.platforms import (
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+
+
+class DesktopCloseGuardTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.window = Mock()
+        self.window.events.loaded.is_set.return_value = True
+        self.guard = DesktopCloseGuard(self.window)
+
+    def test_close_waits_for_note_save_without_blocking_the_ui_thread(self) -> None:
+        with patch("desktop.app.threading.Thread") as thread:
+            self.assertFalse(self.guard.request_close())
+            self.assertFalse(self.guard.request_close())
+            thread.assert_called_once()
+        self.window.destroy.assert_not_called()
+        self.guard._save()
+        callback = self.window.evaluate_js.call_args.kwargs["callback"]
+        callback(True)
+        self.window.destroy.assert_called_once()
+        self.assertTrue(self.guard.request_close())
+
+    def test_failed_save_keeps_window_open_and_allows_retry(self) -> None:
+        with patch("desktop.app.threading.Thread") as thread:
+            self.assertFalse(self.guard.request_close())
+            self.guard._saved(False)
+            self.assertFalse(self.guard.request_close())
+            self.assertEqual(thread.call_count, 2)
+        self.window.destroy.assert_not_called()
+
+    def test_webview_failure_does_not_discard_the_note(self) -> None:
+        self.window.evaluate_js.side_effect = RuntimeError("WebView unavailable")
+        self.guard._pending = True
+        self.guard._save()
+        self.assertFalse(self.guard._pending)
+        self.window.destroy.assert_not_called()
+
+    def test_window_can_close_before_frontend_is_loaded(self) -> None:
+        self.window.events.loaded.is_set.return_value = False
+        self.assertTrue(self.guard.request_close())
+        self.window.evaluate_js.assert_not_called()
 
 
 class DesktopPlatformTestCase(unittest.TestCase):
