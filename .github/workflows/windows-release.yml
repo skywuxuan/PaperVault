@@ -75,18 +75,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          if-no-files-found: error
           path: dist/PaperVault-*-windows-x64.zip
-
-  build-macos:
-    needs: [validate-version]
-    uses: ./.github/workflows/macos-build.yml
-    with:
-      ref: ${{ github.sha }}
 
   publish-release:
     runs-on: ubuntu-latest
-    needs: [validate-version, build-windows, build-macos]
+    needs: [validate-version, build-windows]
 
     steps:
       - name: Check out source
@@ -105,34 +98,15 @@ jobs:
       - name: Download release archives
         uses: actions/download-artifact@v4
         with:
-          pattern: "{windows-x64,macos-arm64}"
+          pattern: "windows-x64"
           path: dist
           merge-multiple: true
-
-      - name: Verify release archives and prepare checksums
-        env:
-          RELEASE_VERSION: ${{ needs.validate-version.outputs.version }}
-        run: |
-          set -euo pipefail
-          cd dist
-          : > SHA256SUMS.txt
-          for platform in windows-x64 macos-arm64; do
-            archive="PaperVault-v${RELEASE_VERSION}-${platform}.zip"
-            test -s "$archive"
-            sha256sum "$archive" > "${archive}.sha256"
-            cat "${archive}.sha256" >> SHA256SUMS.txt
-          done
-          sha256sum --check SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: PaperVault ${{ github.ref_name }}
           body_path: release-notes.md
-          files: |
-            dist/PaperVault-*.zip
-            dist/PaperVault-*.zip.sha256
-            dist/SHA256SUMS.txt
-          fail_on_unmatched_files: true
+          files: dist/PaperVault-*.zip
           generate_release_notes: false
           prerelease: ${{ needs.validate-version.outputs.prerelease == 'true' }}
