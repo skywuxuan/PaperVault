@@ -1,173 +1,173 @@
 # PaperVault
 
-PaperVault 是一个运行在本机的论文资料库。它把 PDF、双语摘要、豆包解析、笔记、批注、标签、评分和单词本保存在本地，不需要云端数据库。
+**把论文读进去，把理解留下来。**
 
-[Windows x64 桌面版 v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) · [下载 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.1.0/PaperVault-v1.1.0-windows-x64.zip) · [变更记录](CHANGELOG.md)
+[下载稳定版](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) · [快速开始](#快速开始) · [桌面版指南](docs/DESKTOP.md) · [版本记录](CHANGELOG.md)
 
-## 当前版本
+[![Desktop Release](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml/badge.svg)](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Windows x64](https://img.shields.io/badge/Desktop-Windows%20x64-0F766E)
 
-当前正式发布的是 Windows x64 桌面版。桌面版使用 WebView2 加载同一套本地后端和前端，用户数据默认保存在：
+PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双语摘要、阅读批注和自己的笔记放在一起，从收集资料、理解内容到整理观点，形成一套连续的阅读流程。
 
-```text
-%LOCALAPPDATA%\PaperVault
-```
+论文库保存在你的电脑上，无需注册账号，也不依赖云端数据库。你可以使用 Windows 桌面版，也可以从源码启动，在浏览器里访问同一套界面。
 
-Windows 10/11 通常已经安装 WebView2 Runtime；如果系统没有安装，需要先安装它。
+![PaperVault 论文库界面](docs/images/library-preview.png)
 
-下载 ZIP 后解压，运行：
+*v1.2.0-rc.1 源码预览界面，图中论文为演示数据；稳定版 v1.1.0 的界面有所不同。*
 
-```text
-PaperVault\PaperVault.exe
-```
+## 最近更新
 
-桌面版升级不会覆盖论文库数据。当前 Release 只提供 Windows；仓库中的 macOS 脚本是后续平台预留，不属于本次发布。
+- **2026-09-15 · v1.2.0-rc.1 本地候选版** — 更新论文库与阅读器设计，修复笔记保存、摘要任务恢复和资源包兼容性问题。尚未上传 GitHub Releases；可从源码运行，或使用本地构建的预览包。[查看变更](CHANGELOG.md#120-rc1---2026-09-15) · [试用说明](docs/DESKTOP.md#试用本地候选版)。
+- **2026-09-11 · [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)** — 新增 `.pvault` 备份与恢复，把论文、PDF、摘要、笔记和单词本打包迁移。
+- **2026-08-13 · [v1.0.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.0.0)** — 首个 Windows 桌面正式版，提供论文管理、双语摘要阅读和单词本。
 
-## 本地 Web 版
+## 从一篇 PDF 开始
 
-要求：Windows 10/11、Python 3.10 或更高版本。
+### 收集与整理
 
-在仓库根目录运行：
+一次导入一篇或多篇 PDF，自动识别标题、作者和年份。用标签、阅读状态和 0–3 星推荐度整理论文；通过关键词和筛选快速找到需要的内容。删除的论文先进入回收站，可以恢复。
+
+### 对照阅读
+
+在同一个阅读器中查看 PDF、英文摘要和中文摘要。摘要支持段落联动、同步滚动与原文页码定位；PDF 支持缩放、跳页、文本选择和高亮批注。
+
+你也可以导入豆包公开分享页中的解析，保留标题、列表、表格和公式，并生成英文对照。PaperVault 生成的摘要与豆包解析分别保存，随时切换。
+
+### 留下自己的理解
+
+在独立笔记面板中记录想法，将 PDF 或摘要中的内容引用到笔记。遇到生词时，查看释义与美式发音，并加入单词本。论文摘要和元数据可导出为 Markdown 或 JSON。
+
+### 备份与迁移
+
+通过“备份与恢复”生成 `.pvault` 文件，将资料带到另一台电脑，或为当前论文库保留副本。
+
+| 资源包 | 包含内容 | 适合场景 |
+| --- | --- | --- |
+| 标准资源包 | 数据库与全部原始 PDF | 日常备份、迁移论文库 |
+| 离线完整包 | 标准资源包的内容，加上已有预览资产和离线翻译模型 | 连同已下载的离线资源一起迁移 |
+
+两种资源包都会保留摘要、豆包解析、笔记、引用、批注、标签、评分、单词本、回收站和任务记录。模型 API Key、`.env.local`、WebView 缓存和临时文件不包含在资源包中。
+
+恢复时会先校验文件路径、SHA-256 和数据库完整性，再自动备份当前库并替换数据。**当前版本仅支持完整替换，不支持合并两个论文库。** 资源包不包含程序本身；在新电脑上先安装 PaperVault，再导入资源包。
+
+## 快速开始
+
+### Windows 桌面版
+
+适用于 Windows 10/11 x64，无需自行安装 Python。
+
+1. 从 [v1.1.0 发行页](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) 下载 `PaperVault-v1.1.0-windows-x64.zip`。
+2. 完整解压，运行其中的 `PaperVault\PaperVault.exe`。
+3. 点击“导入 PDF”，选择文件，开始整理和阅读。
+
+桌面版依赖 Microsoft Edge WebView2 Runtime；系统未安装时，需要先安装该组件。论文库默认保存在 `%LOCALAPPDATA%\PaperVault`，与程序目录分开，替换新版程序不会覆盖该目录。
+
+当前稳定发行包为 v1.1.0，仅提供 Windows x64。仓库源码已进入 v1.2.0-rc.1 候选阶段，新界面和修复尚未包含在稳定版中。候选版试用、macOS 构建、数据目录和升级迁移说明见[桌面版指南](docs/DESKTOP.md)。
+
+### 本地 Web 版
+
+需要 Windows 10/11 和 Python 3.10 或更高版本。在仓库根目录运行：
 
 ```powershell
 .\start.ps1
 ```
 
-也可以双击 `start.bat`。启动脚本会检查依赖，并准备本地英译中模型。服务启动后访问：
+也可以双击 `start.bat`。启动脚本会安装依赖并准备本地英译中模型；首次启动需要联网下载。启动后，在浏览器中打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。
 
-```text
-http://127.0.0.1:8765
-```
-
-手动启动后端：
+已有运行环境时，可直接启动服务：
 
 ```powershell
 .\.venv\Scripts\python.exe -m backend.app --host 127.0.0.1 --port 8765
 ```
 
-## 主要功能
+## 生成双语摘要
 
-### 论文库
+PaperVault 默认使用**本地结构索引**，不需要 API Key，可提取论文结构和重点内容。要生成详细的研究摘要与中文翻译，请在“模型设置”中选择“OpenAI 兼容接口”，填写服务地址、模型名称和 API Key。
 
-- 导入单篇或多篇 PDF，自动识别标题、作者和年份。
-- 按关键词、标签、摘要状态、推荐度和入库时间筛选。
-- 支持 0-3 星推荐度、已读/未读、标签管理和批量操作。
-- 支持 Markdown 摘要和 JSON 元数据导出。
-- 删除论文会进入本地回收站，可恢复，不会立即删除 PDF。
+英文分析模型、中文翻译模型、上下文长度和推理强度均可单独配置；是否支持这些选项取决于所用模型服务。配置远程模型后，生成摘要所需的论文内容会发送到你选择的服务。
 
-### 论文阅读器
+从源码运行时，也可以复制配置示例：
 
-- PDF 页面预览、缩放、页码跳转、文本选择和高亮批注。
-- 系统生成的双语研究者摘要，包含稳定段落结构和 PDF 页码引用。
-- “系统解析”和“豆包解析”可以独立切换。
-- 豆包解析支持公开分享链接导入，保留标题、列表、表格、粗体和 LaTeX 公式，并继续生成英文版。
-- 系统摘要和豆包摘要支持中英文段落映射、高亮和同步滚动。
-- “我的笔记”是独立的悬浮面板，可以引用 PDF、系统摘要或豆包解析中的内容。
-- 英文单词或短语可以打开词典卡片、查看释义、播放美式发音并加入单词本。
+```powershell
+Copy-Item .env.example .env.local
+```
 
-### 备份与恢复
+编辑 `.env.local`，填写自己的服务配置：
 
-顶部“备份与恢复”会为当前本地论文库生成 `.pvault` 资源包。
-
-- 标准资源包：SQLite 数据库和全部原始 PDF。
-- 离线完整包：额外包含 PDF 预览资产和离线翻译模型。
-- 资源包包含论文、摘要、豆包解析、笔记、引用、批注、标签、评分、单词本、回收站和已有任务记录。
-- API Key、`.env.local`、WebView 缓存和临时文件永远不会写入资源包。
-- 恢复前会校验清单、路径、SHA-256 和数据库完整性，并自动备份当前论文库。
-- V1 只支持完整替换恢复，不支持把两个论文库合并。
-
-当前库可在备份窗口中看到资源包估算大小。资源包是数据文件，不包含 PaperVault 程序本身；重新安装桌面版或本地服务后，再从“备份与恢复”导入即可。
-
-## 模型配置
-
-本地结构索引是默认模式，不需要 API Key。它用于提取论文结构和重点内容，不等同于模型生成的完整双语研究者摘要。
-
-需要生成详细英文摘要和中文翻译时，在“模型设置”中选择“OpenAI 兼容接口”，填写：
-
-- API Base URL，例如 `https://api.openai.com/v1` 或兼容网关地址；
-- 默认模型；
-- 可选的英文分析模型和中文翻译模型；
-- 可选的上下文长度和英文分析推理强度；
-- API Key。
-
-也可以在仓库根目录创建 `.env.local`：
-
-```env
+```dotenv
+# 留空时使用默认数据目录；也可填写自定义路径。
 PAPER_VAULT_DATA_DIR=
 PAPER_VAULT_BASE_URL=https://api.openai.com/v1
 PAPER_VAULT_API_KEY=your-key
-PAPER_VAULT_MODEL=gpt-4.1-mini
+PAPER_VAULT_MODEL=your-model-name
 PAPER_VAULT_ANALYSIS_MODEL=
 PAPER_VAULT_TRANSLATION_MODEL=
 PAPER_VAULT_CONTEXT_WINDOW_TOKENS=
 PAPER_VAULT_ANALYSIS_REASONING_EFFORT=high
 ```
 
-源码启动时会读取仓库根目录的 `.env.local`。环境变量优先于 SQLite 中保存的模型设置；`.env.local` 已被 Git 忽略，也不会打进桌面安装包。API Key 只用于当前设备的模型请求，不会进入资源包。
+配置优先级为：**系统环境变量 → `.env.local` → 应用中保存的设置**；模型配置项只有非空值才会覆盖已保存的设置。`.env.local` 已加入 Git 忽略列表，不会打包进发行版。更多说明见[桌面版指南](docs/DESKTOP.md#模型与环境配置)。
 
-## 数据目录
+## 数据保存在什么地方
 
-本地 Web 版默认使用仓库根目录的 `data/`；可以通过 `PAPER_VAULT_DATA_DIR` 或启动参数切换目录。桌面版默认使用 `%LOCALAPPDATA%\PaperVault`。
+| 运行方式 | 默认数据目录 |
+| --- | --- |
+| Windows 桌面版 | `%LOCALAPPDATA%\PaperVault` |
+| 从源码启动的 Web 版 | 仓库中的 `data/` |
+| macOS 桌面源码构建 | `~/Library/Application Support/PaperVault` |
+
+可通过 `PAPER_VAULT_DATA_DIR` 或 `--data-dir` 选择其他目录。桌面版还支持持久化的 `desktop.json` 配置，详见[桌面版指南](docs/DESKTOP.md#更改数据目录)。
 
 ```text
 data/
-  paper-vault.db       # SQLite 元数据、摘要、笔记、单词本和设置
-  uploads/             # 原始 PDF
-  assets/              # PDF 预览和图表资产
-  models/              # 本地翻译模型
-  backups/             # 资源包和本地备份文件
-  webview/             # 桌面 WebView 本地缓存
+├── paper-vault.db   # 论文信息、摘要、笔记、单词本与设置
+├── uploads/         # 原始 PDF
+├── assets/          # 提取的页面与图表预览
+├── models/          # 离线翻译模型
+├── backups/         # 导出的资源包
+└── webview/         # 桌面版浏览器缓存
 ```
 
-论文、PDF、摘要和个人资料的真源是 SQLite 与 `uploads/`。`assets/`、`models/` 和 `webview/` 可以重新生成或重新下载，资源包会按选择决定是否包含它们。
+`paper-vault.db` 与 `uploads/` 是需要保留的核心数据。恢复前的自动备份保存在数据目录旁的 `PaperVault-backups/` 中；建议将重要备份另存到其他磁盘或备份位置。
 
-## Windows 构建
+## 开发与构建
 
-在 Windows 上准备好 `.venv` 和桌面依赖后运行：
-
-```powershell
-.\build-windows.ps1 -SkipInstall
-```
-
-推荐的一目录输出为：
+前端使用原生 HTML、CSS 和 JavaScript；后端是 Python 本地 HTTP 服务，数据存储使用 SQLite。桌面壳负责启动本地服务，并在系统 WebView 中加载前端。
 
 ```text
-dist\PaperVault\PaperVault.exe
+frontend/                    界面与交互
+backend/app.py               HTTP 服务与 API
+backend/database.py          SQLite 数据访问
+backend/deep_summary.py      研究摘要与中文翻译
+backend/doubao.py            豆包解析导入
+backend/pdf_parser.py        PDF 文本和预览提取
+backend/resource_package.py  资源包生成、校验与恢复
+desktop/                     桌面窗口与平台适配
+tests/                       回归测试
 ```
 
-不带 `-SkipInstall` 时，脚本会先安装 `requirements-desktop.txt`。推送 `v*` 标签后，`.github/workflows/windows-release.yml` 会在 Windows runner 上构建 ZIP 并创建 GitHub Release。
-
-## 测试
-
-运行资源包、豆包导入、模型配置和 API 核心回归测试：
+构建 Windows 桌面版：
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest tests.test_resource_package tests.test_doubao tests.test_api tests.test_config tests.test_llm -q
+.\build-windows.ps1
 ```
 
-检查前端语法：
+输出为 `dist\PaperVault\PaperVault.exe`。脚本参数、macOS 构建与发布流程见[桌面版指南](docs/DESKTOP.md#开发与打包)。
+
+运行测试与前端语法检查：
 
 ```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q
 node --check frontend\app.js
+node --test tests\test_frontend.cjs
 ```
 
-## 项目结构
+## 使用边界
 
-```text
-frontend/                    # 原生 HTML / CSS / JavaScript 界面
-backend/app.py               # 本地 HTTP 服务和 REST API
-backend/database.py          # SQLite 数据访问层
-backend/resource_package.py  # 资源包生成、校验和恢复
-backend/deep_summary.py      # 英文研究者摘要和中文翻译
-backend/doubao.py            # 豆包分享页导入和英文转换
-backend/pdf_parser.py        # PDF 文本、页面和资产提取
-backend/offline_translation.py # 本地英译中模型
-desktop/                     # Windows 桌面壳和平台数据目录
-tests/                       # API、模型、豆包和资源包回归测试
-```
+- 当前版本不会自动对扫描版 PDF 执行 OCR；需要 PDF 自带文本层。
+- 非视觉模型接收提取出的正文、图注与表格文本，不读取页面像素。
+- 离线完整包只包含已经下载的模型，不会让远程模型自动变为离线可用。
+- PaperVault 面向本地单用户使用，目前没有云端账号、多人协作或云同步。
 
-## 当前边界
-
-- 扫描版 PDF 没有文本层时，当前版本不会自动 OCR。
-- 非视觉模型只接收 PDF 提取出的文本、图注和表格文本，不会读取页面像素。
-- 本项目是本地单用户论文库，不提供云端账号、多人协作或云同步。
-- 资源包恢复会完整替换当前库；恢复前的自动备份应保存在其他磁盘或同步目录，才能防止设备级损坏。
+遇到问题或有改进建议，欢迎在 [GitHub Issues](https://github.com/skywuxuan/PaperVault/issues) 中反馈。
