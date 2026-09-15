@@ -1024,6 +1024,14 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 fields["read_state"] = read_state
             if "summary_pairs" in payload:
                 fields["summary_pairs"] = validate_pairs(payload["summary_pairs"])
+                fields["summary_blocks"] = []
+                fields["summary_paper_title"] = ""
+                fields["summary_translation_status"] = "none"
+                fields["summary_translation_error"] = ""
+                fields["summary_translation_error_code"] = ""
+                fields["summary_analysis_model"] = ""
+                fields["summary_translation_model"] = ""
+                fields["summary_prompt_version"] = ""
                 fields["summary_status"] = "edited"
                 fields["summary_provider"] = (
                     "curated" if payload.get("summary_provider") == "curated" else "manual"
@@ -1865,10 +1873,15 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
     def send_error_json(self, status: HTTPStatus, message: str) -> None:
+        # An early rejection may leave a request body unread. Do not parse those
+        # bytes as the next request on an HTTP/1.1 persistent connection.
+        self.close_connection = True
         self.send_json({"error": message}, status)
 
     def log_message(self, format_string: str, *args: Any) -> None:

@@ -374,6 +374,55 @@ class Database:
                 """,
                 (utc_now(),),
             )
+            for row in connection.execute(
+                """
+                SELECT * FROM papers
+                WHERE summary_status IN ('generating', 'translating')
+                   OR summary_translation_status = 'translating'
+                """
+            ).fetchall():
+                try:
+                    blocks = json.loads(row["summary_blocks"] or "[]")
+                    pairs = json.loads(row["summary_pairs"] or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    blocks, pairs = [], []
+                blocks = (
+                    [block for block in blocks if isinstance(block, dict)]
+                    if isinstance(blocks, list) else []
+                )
+                translation_interrupted = (
+                    row["summary_status"] == "translating"
+                    or row["summary_translation_status"] == "translating"
+                )
+                if blocks:
+                    translated = all(str(block.get("text_zh", "")).strip() for block in blocks)
+                    status = "ready" if translated else "english_ready"
+                    if translation_interrupted:
+                        status = "translation_error"
+                elif pairs:
+                    status = "ready" if row["summary_provider"] == "openai_compatible" else "edited"
+                else:
+                    status = "error"
+                if translation_interrupted:
+                    connection.execute(
+                        """
+                        UPDATE papers SET summary_status = ?, summary_translation_status = 'error',
+                            summary_translation_error = '中文翻译在上次服务退出时中断，请重新翻译。',
+                            summary_translation_error_code = 'interrupted', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (status, utc_now(), row["id"]),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE papers SET summary_status = ?,
+                            summary_error = '论文解析在上次服务退出时中断，请重新生成。',
+                            summary_error_code = 'interrupted', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (status, utc_now(), row["id"]),
+                    )
             from .pdf_parser import infer_publication_year
             for row in connection.execute(
                 """

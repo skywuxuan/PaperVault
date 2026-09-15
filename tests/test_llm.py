@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pymupdf
 
 from backend.llm import (
+    SummaryError,
     _apply_provider_controls,
     _parse_pairs,
     _request_chat_completion_details,
@@ -24,6 +25,18 @@ from backend.pdf_parser import (
 
 
 class SummaryFormatTestCase(unittest.TestCase):
+    def test_invalid_endpoint_is_reported_as_a_model_error(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), self.assertRaises(SummaryError):
+            _request_chat_completion_details({}, {"base_url": "not-a-url"}, 10)
+
+    def test_malformed_completion_message_is_reported_as_a_model_error(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(
+            {"choices": [{"message": "unexpected text"}]}
+        ).encode("utf-8")
+        with patch("backend.llm.urllib.request.urlopen", return_value=response), self.assertRaises(SummaryError):
+            _request_chat_completion_details({}, {"base_url": "https://example.com/v1"}, 10)
+
     def test_request_prefers_environment_key_over_saved_key(self) -> None:
         response = MagicMock()
         response.__enter__.return_value.read.return_value = json.dumps(

@@ -5,7 +5,6 @@ import json
 import sqlite3
 import tempfile
 import threading
-import time
 import unittest
 import uuid
 from contextlib import closing
@@ -21,6 +20,41 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
 class DatabaseMigrationTestCase(unittest.TestCase):
+    def test_interrupted_summaries_recover_without_discarding_saved_content(self) -> None:
+        cases = [
+            ("generating", [], [], "none", "error"),
+            ("generating", [], [{"en": "Saved", "zh": "已保存"}], "none", "edited"),
+            ("generating", [{"text_en": "Saved", "text_zh": "已保存"}], [], "ready", "ready"),
+            ("translating", [{"text_en": "Saved"}], [], "translating", "translation_error"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "paper-vault.db")
+            database.initialize()
+            records = []
+            for status, blocks, pairs, translation_status, expected_status in cases:
+                paper_id = insert_test_paper(database)
+                database.update_paper(
+                    paper_id,
+                    {
+                        "summary_status": status,
+                        "summary_blocks": blocks,
+                        "summary_pairs": pairs,
+                        "summary_translation_status": translation_status,
+                    },
+                    None,
+                )
+                records.append((paper_id, blocks, pairs, expected_status))
+            Database(database.path).initialize()
+            for paper_id, blocks, pairs, expected_status in records:
+                with self.subTest(expected_status=expected_status):
+                    paper = database.get_paper(paper_id)
+                    self.assertEqual(paper["summary_status"], expected_status)
+                    self.assertEqual(paper["summary_blocks"], blocks)
+                    self.assertEqual(paper["summary_pairs"], pairs)
+                    self.assertNotEqual(paper["summary_translation_status"], "translating")
+                    error_key = "summary_translation_error_code" if expected_status == "translation_error" else "summary_error_code"
+                    self.assertEqual(paper[error_key], "interrupted")
+
     def test_legacy_database_is_migrated_without_changing_paper_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "paper-vault.db"
@@ -160,37 +194,18 @@ class AnalysisApiTestCase(unittest.TestCase):
         connection.close()
         return status, data
 
-    def wait_for_job(self, job_id: str) -> dict:
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            status, data = self.request("GET", f"/api/analysis-jobs/{job_id}")
-            self.assertEqual(status, 200)
-            if data["job"]["status"] in {"succeeded", "failed"}:
-                return data["job"]
-            time.sleep(0.05)
-        self.fail("analysis job did not finish")
-
-    def test_quick_read_and_figure_runs_are_versioned_without_overwriting_deep_read(self) -> None:
+    def test_removed_analysis_and_qa_routes_stay_unavailable(self) -> None:
         original_pairs = self.server.db.get_paper(self.paper_id)["summary_pairs"]
-        for slug in ("quick-read", "figure-analysis"):
-            status, data = self.request(
-                "POST", f"/api/papers/{self.paper_id}/analyses/{slug}"
-            )
-            self.assertEqual(status, 202)
-            job = self.wait_for_job(data["job"]["id"])
-            self.assertEqual(job["status"], "succeeded")
-            self.assertEqual(len(job["input_hash"]), 64)
-            self.assertEqual(
-                job["prompt_version"],
-                {"quick-read": "quick-read-v1", "figure-analysis": "figure-analysis-v2"}[slug],
-            )
-        status, analyses = self.request("GET", f"/api/papers/{self.paper_id}/analyses")
-        self.assertEqual(status, 200)
-        self.assertEqual(set(analyses["latest"]), {"quick_read", "figure_analysis"})
-        self.assertTrue(analyses["latest"]["quick_read"]["content"]["headline"]["page"])
-        self.assertEqual(
-            analyses["latest"]["figure_analysis"]["content"]["figures"][0]["page"], 1
-        )
+        for method, path, payload in (
+            ("POST", f"/api/papers/{self.paper_id}/analyses/quick-read", {}),
+            ("POST", f"/api/papers/{self.paper_id}/analyses/figure-analysis", {}),
+            ("GET", f"/api/papers/{self.paper_id}/analyses", None),
+            ("POST", "/api/qa", {"question": "What does this paper discuss?"}),
+        ):
+            with self.subTest(path=path):
+                status, data = self.request(method, path, payload)
+                self.assertEqual(status, 404)
+                self.assertEqual(data["error"], "API route not found")
         self.assertEqual(self.server.db.get_paper(self.paper_id)["summary_pairs"], original_pairs)
 
     def test_visual_refresh_failure_preserves_existing_asset_index(self) -> None:
@@ -211,86 +226,6 @@ class AnalysisApiTestCase(unittest.TestCase):
         self.assertEqual(
             self.server.db.get_paper(self.paper_id)["visual_assets"], legacy_assets
         )
-
-    def test_qa_requires_configuration_and_filters_sources_to_model_citations(self) -> None:
-        status, unavailable = self.request(
-            "POST",
-            "/api/qa",
-            {"question": "What does the retrieval architecture do?", "scope": "paper", "paper_id": self.paper_id},
-        )
-        self.assertEqual(status, 409)
-        self.assertEqual(unavailable["error_code"], "qa_unavailable")
-        self.server.db.update_settings(
-            {
-                "provider": "openai_compatible",
-                "base_url": "http://127.0.0.1:9/v1",
-                "model": "test-model",
-                "api_key": "",
-                "max_input_chars": "20000",
-            }
-        )
-        with patch(
-            "backend.app.answer_with_citations",
-            return_value=("It retrieves page-grounded evidence.", ["S1", "S99"], 17),
-        ):
-            status, answer = self.request(
-                "POST",
-                "/api/qa",
-                {"question": "What does the retrieval architecture do?", "scope": "paper", "paper_id": self.paper_id},
-            )
-        self.assertEqual(status, 200)
-        self.assertEqual(len(answer["sources"]), 1)
-        self.assertEqual(answer["sources"][0]["id"], "S1")
-        self.assertEqual(answer["sources"][0]["page"], 1)
-        self.assertEqual(answer["prompt_version"], "citation-qa-v1")
-        self.server.db.update_settings({"provider": "local"})
-
-    def test_generic_paper_overview_uses_representative_full_paper_context(self) -> None:
-        chunks = build_text_chunks(
-            self.paper_id,
-            [
-                {
-                    "page": page,
-                    "text": f"Page {page} contains distinct evidence for the paper narrative.",
-                }
-                for page in range(1, 11)
-            ],
-        )
-        self.server.db.replace_paper_chunks(self.paper_id, chunks)
-        self.server.db.update_settings(
-            {
-                "provider": "openai_compatible",
-                "base_url": "http://127.0.0.1:9/v1",
-                "model": "test-model",
-                "api_key": "",
-                "max_input_chars": "20000",
-            }
-        )
-        captured_pages: list[int] = []
-
-        def answer_from_context(question, selected_chunks, settings):
-            captured_pages.extend(chunk["page"] for chunk in selected_chunks)
-            return "这篇论文按顺序讨论了其研究问题、方法和结果。", ["S1", "S8"], 21
-
-        with patch("backend.app.answer_with_citations", side_effect=answer_from_context):
-            status, answer = self.request(
-                "POST",
-                "/api/qa",
-                {
-                    "question": "这个论文里面说的什么",
-                    "scope": "paper",
-                    "paper_id": self.paper_id,
-                },
-            )
-
-        self.assertEqual(status, 200)
-        self.assertEqual(len(captured_pages), 8)
-        self.assertEqual(captured_pages, sorted(captured_pages))
-        self.assertEqual(captured_pages[0], 1)
-        self.assertEqual(captured_pages[-1], 10)
-        self.assertTrue(any(3 <= page <= 8 for page in captured_pages))
-        self.assertEqual([source["page"] for source in answer["sources"]], [1, 10])
-        self.server.db.update_settings({"provider": "local"})
 
     def test_soft_delete_keeps_files_and_can_be_restored(self) -> None:
         upload = self.server.upload_dir / f"{self.paper_id}.pdf"

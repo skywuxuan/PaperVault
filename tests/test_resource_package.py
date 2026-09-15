@@ -92,13 +92,40 @@ class ResourcePackageTestCase(unittest.TestCase):
     def test_inspect_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             package_path = Path(directory) / "bad.pvault"
-            with zipfile.ZipFile(package_path, "w") as archive:
-                archive.writestr("manifest.json", "{}")
-                archive.writestr("vault.sqlite", b"not a database")
-                archive.writestr("checksums.sha256", "")
-                archive.writestr("../escape.txt", b"unsafe")
+            for member in ("../escape.txt", "uploads/C:/escape.txt", "uploads/file.pdf:stream", ".", "uploads/./paper.pdf"):
+                with self.subTest(member=member):
+                    with zipfile.ZipFile(package_path, "w") as archive:
+                        archive.writestr("manifest.json", "{}")
+                        archive.writestr("vault.sqlite", b"not a database")
+                        archive.writestr("checksums.sha256", "")
+                        archive.writestr(member, b"unsafe")
+                    with self.assertRaises(ResourcePackageError):
+                        inspect_resource_package(package_path)
+
+    def test_inspect_accepts_normal_zip_directory_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_dir, _ = self.make_data_dir(root, "Source")
+            package_path, _ = export_resource_package(data_dir, output_dir=root / "exports")
+            with zipfile.ZipFile(package_path, "a") as archive:
+                archive.writestr("uploads/", b"")
+            self.assertEqual(inspect_resource_package(package_path)["counts"]["papers"], 1)
+
+    def test_restore_rejects_incompatible_database_before_replacing_library(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir, _ = self.make_data_dir(root, "Newer source")
+            target_dir, target_paper_id = self.make_data_dir(root, "Current library")
+            with Database(source_dir / "paper-vault.db").connect() as connection:
+                connection.execute("PRAGMA user_version = 99")
+            package_path, _ = export_resource_package(
+                source_dir, schema_version=4, output_dir=root / "exports"
+            )
             with self.assertRaises(ResourcePackageError):
-                inspect_resource_package(package_path)
+                restore_resource_package(package_path, target_dir, schema_version=4)
+            current = Database(target_dir / "paper-vault.db")
+            self.assertEqual(current.get_paper(target_paper_id)["title"], "Current library")
+            self.assertEqual(current.get_settings(include_secret=True)["api_key"], "local-secret")
 
 
 class ResourcePackageApiTestCase(unittest.TestCase):
@@ -174,3 +201,8 @@ class ResourcePackageApiTestCase(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(restored_body.decode("utf-8"))["restored"])
+        status, next_inspected_body, _ = self.request(
+            "POST", "/api/resource-packages/inspect", package, "application/vnd.papervault+zip"
+        )
+        self.assertEqual(status, 200, next_inspected_body.decode("utf-8"))
+        self.assertTrue(json.loads(next_inspected_body.decode("utf-8"))["package_id"])

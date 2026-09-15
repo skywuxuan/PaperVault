@@ -274,6 +274,16 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(search_data["total"], 1)
 
+        self.server.db.update_paper(
+            paper_id,
+            {
+                "summary_blocks": [{"id": "old", "text_en": "Old report", "text_zh": "旧报告"}],
+                "summary_paper_title": "Old report title",
+                "summary_translation_status": "ready",
+                "summary_analysis_model": "old-model",
+            },
+            None,
+        )
         status, updated_data, _ = self.json_request(
             "PUT",
             f"/api/papers/{paper_id}",
@@ -302,6 +312,10 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(updated_data["paper"]["rating"], 3)
         self.assertEqual(updated_data["paper"]["read_state"], "read")
         self.assertEqual(updated_data["paper"]["summary_model"], "")
+        self.assertEqual(updated_data["paper"]["summary_blocks"], [])
+        self.assertEqual(updated_data["paper"]["summary_paper_title"], "")
+        self.assertEqual(updated_data["paper"]["summary_analysis_model"], "")
+        self.assertEqual(updated_data["paper"]["summary_translation_status"], "none")
         self.assertEqual(updated_data["paper"]["summary_pairs"][0]["terms"][0]["zh"], "检索")
         self.assertEqual(updated_data["paper"]["summary_pairs"][0]["page_refs"], [1])
 

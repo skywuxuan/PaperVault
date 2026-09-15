@@ -295,10 +295,10 @@ def _request_chat_completion_details(
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    request = urllib.request.Request(
-        endpoint, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
-    )
     try:
+        request = urllib.request.Request(
+            endpoint, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+        )
         with urllib.request.urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
@@ -309,6 +309,8 @@ def _request_chat_completion_details(
     try:
         choice = result["choices"][0]
         message = choice["message"]
+        if not isinstance(message, dict):
+            raise TypeError("Completion message must be an object")
         content = message.get("content")
     except (KeyError, IndexError, TypeError) as exc:
         raise SummaryError("LLM response did not contain chat completion content") from exc

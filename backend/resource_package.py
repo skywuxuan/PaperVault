@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
+from .database import Database
+
 
 PACKAGE_FORMAT_VERSION = 1
 PACKAGE_EXTENSION = ".pvault"
@@ -216,11 +218,19 @@ def export_resource_package(
 
 
 def _safe_member_name(name: str) -> str:
-    normalized = str(name).replace("\\", "/")
+    normalized = str(name)
     path = PurePosixPath(normalized)
-    if not normalized or path.is_absolute() or ".." in path.parts or path.parts[0] == "~":
+    if (
+        not path.parts
+        or "\\" in normalized
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.parts[0] == "~"
+        or path.as_posix() != normalized.rstrip("/")
+        or any(":" in part or part.endswith((" ", ".")) for part in path.parts)
+    ):
         raise ResourcePackageError("资源包包含不安全的文件路径")
-    return path.as_posix()
+    return path.as_posix() + ("/" if normalized.endswith("/") else "")
 
 
 def _validate_database_member(archive: zipfile.ZipFile) -> None:
@@ -241,6 +251,12 @@ def _validate_database_member(archive: zipfile.ZipFile) -> None:
                 connection.close()
             except UnboundLocalError:
                 pass
+        try:
+            # Check the actual database schema, not only the version claimed by
+            # the manifest, before replacing the current library.
+            Database(database).initialize()
+        except (RuntimeError, sqlite3.Error) as exc:
+            raise ResourcePackageError(f"资源包数据库与当前应用不兼容: {exc}") from exc
 
 
 def inspect_resource_package(package_path: Path, *, max_schema_version: int | None = None) -> dict[str, Any]:
@@ -316,6 +332,8 @@ def inspect_resource_package(package_path: Path, *, max_schema_version: int | No
         _validate_database_member(archive)
         manifest["package_size"] = package_path.stat().st_size
         return manifest
+    except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as exc:
+        raise ResourcePackageError(f"资源包文件无法读取: {exc}") from exc
     finally:
         archive.close()
 
@@ -350,7 +368,7 @@ def restore_resource_package(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(info) as source, target.open("wb") as destination:
                     shutil.copyfileobj(source, destination, length=1024 * 1024)
-        for directory in ("uploads", "assets", "models", "backups"):
+        for directory in ("uploads", "assets", "models", "backups/incoming"):
             (stage / directory).mkdir(parents=True, exist_ok=True)
         staged_database = stage / "paper-vault.db"
         extracted_database = stage / DATABASE_MEMBER
@@ -365,6 +383,10 @@ def restore_resource_package(
             connection.commit()
         finally:
             connection.close()
+        try:
+            Database(staged_database).initialize()
+        except (RuntimeError, sqlite3.Error) as exc:
+            raise ResourcePackageError(f"资源包数据库与当前应用不兼容: {exc}") from exc
         _database_counts(staged_database)
 
         if data_dir.is_dir() and (data_dir / "paper-vault.db").is_file():
