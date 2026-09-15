@@ -32,12 +32,12 @@ Windows 与 macOS 复用同一套论文管理、阅读、笔记和备份功能�
 
 预览包名为 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`，内含完整的 `PaperVault.app` 和 Python 运行依赖。只适用于 Apple Silicon（M 系列）Mac。
 
-1. 下载 macOS 构建产物。通过 GitHub Actions 下载时，需要登录 GitHub；打开对应构建页面，在 **Artifacts** 中下载 `macos-arm64`。
+1. 下载 [macOS 构建运行记录](https://github.com/skywuxuan/PaperVault/actions/runs/34952729621)。需要登录 GitHub，在 **Artifacts** 中下载 `macos-arm64`。
 2. 解压 Actions 下载的外层 ZIP，找到 `PaperVault-v1.2.0-rc.1-macos-arm64.zip` 与 `.sha256` 校验文件。直接拿到发行 ZIP 时，无需这一步。
 3. 在 Mac 上完整解压发行 ZIP，将 `PaperVault.app` 拖入“应用程序”文件夹，然后打开。
 4. 导入 PDF；需要详细双语摘要时，在“模型设置”中填写模型服务信息。
 
-预览包使用 **ad hoc 签名**，未使用 Apple Developer ID 签名，也未完成 Apple 公证。因此第一次打开时可能出现无法验证开发者的提示。确认文件来自本仓库、校验值一致后，可参照 [Apple 官方的安全打开应用说明](https://support.apple.com/zh-cn/102445)，在“系统设置 → 隐私与安全性”中为这一个应用选择“仍要打开”。如果提示应用已损坏或包含恶意软件，请停止打开并反馈具体提示。
+本次构建已在 GitHub macOS 15 arm64 runner 上完成：应用架构为 arm64，Info.plist 声明最低 macOS 14.0，`codesign --verify --deep --strict` 通过，111 项 Python 回归测试通过。预览包使用 **ad hoc 签名**，未使用 Apple Developer ID 签名，也未完成 Apple 公证。因此第一次打开时可能出现无法验证开发者的提示。确认文件来自本仓库、校验值一致后，可参照 [Apple 官方的安全打开应用说明](https://support.apple.com/zh-cn/102445)，在“系统设置 → 隐私与安全性”中为这一个应用选择“仍要打开”。如果提示应用已损坏或包含恶意软件，请停止打开并反馈具体提示。
 
 在终端中切换到 ZIP 与校验文件所在目录，可验证完整性：
 
@@ -225,7 +225,7 @@ export PAPER_VAULT_CODESIGN_IDENTITY="Developer ID Application: Example Company 
 
 [macOS Desktop Build 工作流](../.github/workflows/macos-build.yml) 在 macOS 15 的 Apple Silicon runner 上构建原生 arm64 应用。仓库维护者可在 Actions 页面手动运行；完成后，从对应运行页面的 **Artifacts → macos-arm64** 下载 ZIP、SHA-256 校验文件与验证记录。
 
-该工作流仅生成预览构建产物，不创建标签，也不发布 GitHub Release。Actions 产物有保留期限，过期后需要重新构建。
+该工作流仅生成预览构建产物，不创建标签，也不发布 GitHub Release。此次验证运行记录为 [34952729621](https://github.com/skywuxuan/PaperVault/actions/runs/34952729621)，Actions 产物有保留期限，过期后需要重新构建。
 
 ### GitHub Release（Windows）
 

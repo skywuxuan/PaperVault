@@ -70,11 +70,11 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 面向 Apple Silicon（M 系列）Mac，使用系统 WKWebView，无需另行安装 Python 或 WebView2。当前版本为 **v1.2.0-rc.1 预览版**；Intel Mac 暂未提供安装包。
 
-1. 按[桌面版指南](docs/DESKTOP.md#macos-apple-silicon-预览版)中的下载入口获取 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`。
+1. 从[macOS 构建运行记录](https://github.com/skywuxuan/PaperVault/actions/runs/34952729621)的 **Artifacts → macos-arm64** 下载构建产物，解压后取得 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`。
 2. 在 Mac 上完整解压，将 `PaperVault.app` 拖入“应用程序”文件夹。
 3. 打开 PaperVault，导入 PDF 开始阅读。论文库保存在 `~/Library/Application Support/PaperVault`。
 
-预览包使用 ad hoc 签名，尚未进行 Apple Developer ID 签名和公证。首次打开可能被 macOS 拦截，请按[安装指南](docs/DESKTOP.md#macos-apple-silicon-预览版)和 Apple 官方说明处理。升级、备份和 Windows ↔ Mac 迁移均使用同一套 `.pvault` 流程。
+该构建已在 GitHub macOS 15 arm64 runner 上完成，验证为 arm64、macOS 14.0 最低版本声明，`codesign --verify --deep --strict` 通过。预览包使用 ad hoc 签名，尚未进行 Apple Developer ID 签名和公证。首次打开可能被 macOS 拦截，请按[安装指南](docs/DESKTOP.md#macos-apple-silicon-预览版)和 Apple 官方说明处理。升级、备份和 Windows ↔ Mac 迁移均使用同一套 `.pvault` 流程。
 
 ### 本地 Web 版
 

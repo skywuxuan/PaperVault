@@ -13,7 +13,7 @@
 ### 试用与数据保护
 
 - 本地 Windows x64 预览包命名为 `PaperVault-v1.2.0-rc.1-windows-x64.zip`。完整解压后运行 `PaperVault\PaperVault.exe`；不要直接从压缩包中运行，也不要只复制 EXE。
-- Apple Silicon Mac 预览包命名为 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`，解压后将完整的 `PaperVault.app` 放入“应用程序”。通过 GitHub Actions 分发，下载与校验步骤见[macOS 安装指南](docs/DESKTOP.md#macos-apple-silicon-预览版)。预览包使用 ad hoc 签名，未完成 Developer ID 签名和 Apple 公证。
+- Apple Silicon Mac 预览包命名为 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`，解压后将完整的 `PaperVault.app` 放入“应用程序”。[构建运行记录](https://github.com/skywuxuan/PaperVault/actions/runs/34952729621)已验证 arm64、macOS 14.0 最低版本声明和 ad hoc 签名；未完成 Developer ID 签名和 Apple 公证。
 - 建议通过 `--data-dir` 指定独立试用目录，并导入旧版导出的 `.pvault` 资源包。例如在解压目录中运行 `PaperVault\PaperVault.exe --data-dir "D:\PaperVault-Preview"`。
 - 需要使用原论文库时，先用旧版导出备份，再关闭旧版并启动候选版。两个版本不要同时操作同一数据目录。
 - 回退时使用旧版对应的备份；不要让旧版直接读取候选版已修改的数据。
