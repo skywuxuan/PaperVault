@@ -1,6 +1,6 @@
 # 版本记录
 
-这里记录 PaperVault 的用户可见变化。当前稳定版为 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)；`v1.2.0-rc.1` 为本地候选版，尚未上传 GitHub Releases。安装和升级方式见[桌面版指南](docs/DESKTOP.md)。
+这里记录 PaperVault 的用户可见变化。当前 Windows 稳定版为 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)；`v1.2.0-rc.1` 为 Windows 与 Apple Silicon Mac 的候选版，尚未上传 GitHub Releases。安装和升级方式见[桌面版指南](docs/DESKTOP.md)。
 
 ## [Unreleased]
 
@@ -8,18 +8,20 @@
 
 ## [1.2.0-rc.1] - 2026-09-15
 
-本次候选版重新整理了论文库与阅读器的界面，重点改善笔记保存、摘要任务恢复和资料迁移的可靠性。**当前为本地预览，尚未正式发布；GitHub 上的稳定发行包仍是 v1.1.0。**
+本次候选版重新整理了论文库与阅读器的界面，重点改善笔记保存、摘要任务恢复和资料迁移的可靠性，并加入 Apple Silicon Mac 桌面预览构建。**候选版尚未上传 GitHub Releases；Windows 稳定发行包仍是 v1.1.0。**
 
 ### 试用与数据保护
 
 - 本地 Windows x64 预览包命名为 `PaperVault-v1.2.0-rc.1-windows-x64.zip`。完整解压后运行 `PaperVault\PaperVault.exe`；不要直接从压缩包中运行，也不要只复制 EXE。
+- Apple Silicon Mac 预览包命名为 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`，解压后将完整的 `PaperVault.app` 放入“应用程序”。通过 GitHub Actions 分发，下载与校验步骤见[macOS 安装指南](docs/DESKTOP.md#macos-apple-silicon-预览版)。预览包使用 ad hoc 签名，未完成 Developer ID 签名和 Apple 公证。
 - 建议通过 `--data-dir` 指定独立试用目录，并导入旧版导出的 `.pvault` 资源包。例如在解压目录中运行 `PaperVault\PaperVault.exe --data-dir "D:\PaperVault-Preview"`。
 - 需要使用原论文库时，先用旧版导出备份，再关闭旧版并启动候选版。两个版本不要同时操作同一数据目录。
 - 回退时使用旧版对应的备份；不要让旧版直接读取候选版已修改的数据。
 
 ### 新增
 
-- 提供 Apple Silicon macOS 的源码启动与 `.app` 构建脚本；尚未提供 macOS 正式发行包。
+- 提供 Apple Silicon macOS `.app` 预览构建，使用系统 WKWebView，默认把论文库保存在 `~/Library/Application Support/PaperVault`；安装包包含 Python 运行依赖。
+- 增加独立的 macOS arm64 GitHub Actions 构建任务，手动生成 ZIP、校验文件与验证记录，不自动创建公开 Release。
 - 源码启动支持自动读取 `.env.local` 中的模型与数据目录配置。
 
 ### 改进
@@ -46,6 +48,7 @@
 - 手动摘要通过 API 更新时清理旧报告内容；异常模型地址和响应返回可处理的错误。
 - 修复弹窗出现双滚动条，以及 PDF 折叠后点击摘要页码无法直接查看原文的问题。
 - 修复 Windows 发布流水线在没有预建 `.venv` 的环境中无法构建的问题。
+- 修复 macOS 启动与构建脚本的 Python 版本检查，避免在满足版本要求时仍抛出异常。
 - API 服务地址、模型与 API Key 的环境配置现在统一优先于数据库中保存的设置。
 - 配置示例不再指向特定开发者的数据路径，留空时使用默认目录。
 

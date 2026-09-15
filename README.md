@@ -2,15 +2,16 @@
 
 **把论文读进去，把理解留下来。**
 
-[下载稳定版](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) · [快速开始](#快速开始) · [桌面版指南](docs/DESKTOP.md) · [版本记录](CHANGELOG.md)
+[Windows 稳定版](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) · [macOS 预览版](#macos-桌面预览版) · [快速开始](#快速开始) · [桌面版指南](docs/DESKTOP.md) · [版本记录](CHANGELOG.md)
 
 [![Desktop Release](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml/badge.svg)](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Windows x64](https://img.shields.io/badge/Desktop-Windows%20x64-0F766E)
+![macOS arm64](https://img.shields.io/badge/Preview-macOS%20arm64-6D5BD0?logo=apple&logoColor=white)
 
 PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双语摘要、阅读批注和自己的笔记放在一起，从收集资料、理解内容到整理观点，形成一套连续的阅读流程。
 
-论文库保存在你的电脑上，无需注册账号，也不依赖云端数据库。你可以使用 Windows 桌面版，也可以从源码启动，在浏览器里访问同一套界面。
+论文库保存在你的电脑上，无需注册账号，也不依赖云端数据库。你可以使用 Windows 桌面版、试用 Apple Silicon Mac 预览版，也可以从源码启动，在浏览器里访问同一套界面。
 
 ![PaperVault 论文库界面](docs/images/library-preview.png)
 
@@ -18,7 +19,7 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 ## 最近更新
 
-- **2026-09-15 · v1.2.0-rc.1 本地候选版** — 更新论文库与阅读器设计，修复笔记保存、摘要任务恢复和资源包兼容性问题。尚未上传 GitHub Releases；可从源码运行，或使用本地构建的预览包。[查看变更](CHANGELOG.md#120-rc1---2026-09-15) · [试用说明](docs/DESKTOP.md#试用本地候选版)。
+- **2026-09-15 · v1.2.0-rc.1 跨平台候选版** — 更新论文库与阅读器设计，修复笔记保存、摘要任务恢复和资源包兼容性问题，并增加 Apple Silicon Mac 预览构建。候选版尚未上传 GitHub Releases。[查看变更](CHANGELOG.md#120-rc1---2026-09-15) · [试用说明](docs/DESKTOP.md#试用候选版)。
 - **2026-09-11 · [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)** — 新增 `.pvault` 备份与恢复，把论文、PDF、摘要、笔记和单词本打包迁移。
 - **2026-08-13 · [v1.0.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.0.0)** — 首个 Windows 桌面正式版，提供论文管理、双语摘要阅读和单词本。
 
@@ -53,7 +54,7 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 ## 快速开始
 
-### Windows 桌面版
+### Windows 桌面稳定版
 
 适用于 Windows 10/11 x64，无需自行安装 Python。
 
@@ -63,7 +64,17 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 桌面版依赖 Microsoft Edge WebView2 Runtime；系统未安装时，需要先安装该组件。论文库默认保存在 `%LOCALAPPDATA%\PaperVault`，与程序目录分开，替换新版程序不会覆盖该目录。
 
-当前稳定发行包为 v1.1.0，仅提供 Windows x64。仓库源码已进入 v1.2.0-rc.1 候选阶段，新界面和修复尚未包含在稳定版中。候选版试用、macOS 构建、数据目录和升级迁移说明见[桌面版指南](docs/DESKTOP.md)。
+当前稳定发行包为 v1.1.0，仅提供 Windows x64。v1.2.0-rc.1 为候选版，新界面和修复尚未包含在稳定版中。Windows 预览包与独立试用库的使用方式见[桌面版指南](docs/DESKTOP.md#试用候选版)。
+
+### macOS 桌面预览版
+
+面向 Apple Silicon（M 系列）Mac，使用系统 WKWebView，无需另行安装 Python 或 WebView2。当前版本为 **v1.2.0-rc.1 预览版**；Intel Mac 暂未提供安装包。
+
+1. 按[桌面版指南](docs/DESKTOP.md#macos-apple-silicon-预览版)中的下载入口获取 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`。
+2. 在 Mac 上完整解压，将 `PaperVault.app` 拖入“应用程序”文件夹。
+3. 打开 PaperVault，导入 PDF 开始阅读。论文库保存在 `~/Library/Application Support/PaperVault`。
+
+预览包使用 ad hoc 签名，尚未进行 Apple Developer ID 签名和公证。首次打开可能被 macOS 拦截，请按[安装指南](docs/DESKTOP.md#macos-apple-silicon-预览版)和 Apple 官方说明处理。升级、备份和 Windows ↔ Mac 迁移均使用同一套 `.pvault` 流程。
 
 ### 本地 Web 版
 
@@ -115,7 +126,7 @@ PAPER_VAULT_ANALYSIS_REASONING_EFFORT=high
 | --- | --- |
 | Windows 桌面版 | `%LOCALAPPDATA%\PaperVault` |
 | 从源码启动的 Web 版 | 仓库中的 `data/` |
-| macOS 桌面源码构建 | `~/Library/Application Support/PaperVault` |
+| macOS 桌面版 | `~/Library/Application Support/PaperVault` |
 
 可通过 `PAPER_VAULT_DATA_DIR` 或 `--data-dir` 选择其他目录。桌面版还支持持久化的 `desktop.json` 配置，详见[桌面版指南](docs/DESKTOP.md#更改数据目录)。
 
@@ -153,7 +164,15 @@ tests/                       回归测试
 .\build-windows.ps1
 ```
 
-输出为 `dist\PaperVault\PaperVault.exe`。脚本参数、macOS 构建与发布流程见[桌面版指南](docs/DESKTOP.md#开发与打包)。
+输出为 `dist\PaperVault\PaperVault.exe`。
+
+在 Apple Silicon Mac 上构建 macOS 桌面版：
+
+```bash
+./build-macos.sh
+```
+
+输出为 `dist/PaperVault.app`，需要 arm64 Python 3.10+ 和 Xcode Command Line Tools。平台要求、自动构建、签名与发布流程见[桌面版指南](docs/DESKTOP.md#开发与打包)。
 
 运行测试与前端语法检查：
 

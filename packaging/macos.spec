@@ -13,6 +13,9 @@ from tools.desktop_version import read_version
 
 version = read_version()
 info_plist = version.macos_plist()
+# Native wheels selected on current Apple Silicon runners can require macOS 14
+# (for example NumPy's Accelerate build). Do not advertise an older OS baseline.
+info_plist["LSMinimumSystemVersion"] = "14.0"
 datas = [
     (str(project_dir / "frontend"), "frontend"),
     (str(project_dir / "desktop" / "assets"), "desktop/assets"),

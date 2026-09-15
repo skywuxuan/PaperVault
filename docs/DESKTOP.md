@@ -1,22 +1,24 @@
 # PaperVault 桌面版
 
-[返回首页](../README.md) · [下载稳定版](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) · [版本记录](../CHANGELOG.md)
+[返回首页](../README.md) · [Windows 稳定版](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) · [macOS 预览版](#macos-apple-silicon-预览版) · [版本记录](../CHANGELOG.md)
 
 桌面版将 PaperVault 的论文库与阅读器放进独立窗口。打开应用时会自动启动本地服务，关闭窗口时停止服务，无需另外打开终端或浏览器。
 
 ## 平台与发行状态
 
-**稳定版：v1.1.0。当前源码：v1.2.0-rc.1 本地候选版，尚未上传 GitHub Releases。** 本文同时说明稳定版的安装方式和候选版的试用流程。
+**Windows 稳定版：v1.1.0。跨平台候选版：v1.2.0-rc.1，尚未上传 GitHub Releases。** 本文说明 Windows 稳定版与预览版、Apple Silicon Mac 预览版的安装和数据管理方式。
 
 | 平台 | 当前状态 | 窗口引擎 | 默认数据目录 |
 | --- | --- | --- | --- |
 | Windows 10/11 x64 | v1.1.0 稳定 ZIP；v1.2.0-rc.1 本地候选版 | Microsoft Edge WebView2 | `%LOCALAPPDATA%\PaperVault` |
-| Apple Silicon macOS | 提供源码启动与 `.app` 构建脚本 | 系统 WKWebView | `~/Library/Application Support/PaperVault` |
+| Apple Silicon macOS | v1.2.0-rc.1 `.app` 预览版；支持源码构建 | 系统 WKWebView | `~/Library/Application Support/PaperVault` |
 | Linux | 代码中保留平台适配，未提供正式发行包 | 系统 WebView | `$XDG_DATA_HOME/papervault`，未设置时使用 `~/.local/share/papervault` |
 
-macOS 和 Linux 不属于当前 Windows 正式发行版的支持范围。仓库中的发布流水线目前只构建 Windows x64。
+Windows 与 macOS 复用同一套论文管理、阅读、笔记和备份功能，主要区别在窗口引擎、安装形式与数据目录。macOS 当前只构建 arm64，未提供 Intel x64 包；Linux 暂无发行包。
 
 ## 安装与首次使用
+
+### Windows 稳定版
 
 1. 在 [v1.1.0 发行页](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) 中下载 `PaperVault-v1.1.0-windows-x64.zip`。
 2. 将压缩包完整解压到一个固定目录，保留其中所有文件与子目录。
@@ -26,9 +28,28 @@ macOS 和 Linux 不属于当前 Windows 正式发行版的支持范围。仓库�
 
 首次使用可以直接导入、整理和阅读论文。本地结构索引无需 API Key；详细双语摘要需要在“模型设置”中配置兼容的模型服务。
 
-## 试用本地候选版
+### macOS Apple Silicon 预览版
 
-`v1.2.0-rc.1` 用于验证新界面、笔记保存与资料迁移流程。当前没有公开下载页；使用本地构建提供的 `PaperVault-v1.2.0-rc.1-windows-x64.zip`，或按下文从源码启动。
+预览包名为 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`，内含完整的 `PaperVault.app` 和 Python 运行依赖。只适用于 Apple Silicon（M 系列）Mac。
+
+1. 下载 macOS 构建产物。通过 GitHub Actions 下载时，需要登录 GitHub；打开对应构建页面，在 **Artifacts** 中下载 `macos-arm64`。
+2. 解压 Actions 下载的外层 ZIP，找到 `PaperVault-v1.2.0-rc.1-macos-arm64.zip` 与 `.sha256` 校验文件。直接拿到发行 ZIP 时，无需这一步。
+3. 在 Mac 上完整解压发行 ZIP，将 `PaperVault.app` 拖入“应用程序”文件夹，然后打开。
+4. 导入 PDF；需要详细双语摘要时，在“模型设置”中填写模型服务信息。
+
+预览包使用 **ad hoc 签名**，未使用 Apple Developer ID 签名，也未完成 Apple 公证。因此第一次打开时可能出现无法验证开发者的提示。确认文件来自本仓库、校验值一致后，可参照 [Apple 官方的安全打开应用说明](https://support.apple.com/zh-cn/102445)，在“系统设置 → 隐私与安全性”中为这一个应用选择“仍要打开”。如果提示应用已损坏或包含恶意软件，请停止打开并反馈具体提示。
+
+在终端中切换到 ZIP 与校验文件所在目录，可验证完整性：
+
+```bash
+shasum -a 256 -c PaperVault-v1.2.0-rc.1-macos-arm64.zip.sha256
+```
+
+显示 `OK` 表示下载文件与构建产物的校验值一致。保留完整的 `.app` 包；不要只取出其中的可执行文件。
+
+## 试用候选版
+
+`v1.2.0-rc.1` 用于验证新界面、笔记保存与资料迁移流程。Windows 预览包名为 `PaperVault-v1.2.0-rc.1-windows-x64.zip`，macOS 安装方式见上文；也可按下文从源码启动。
 
 如果预览包附有 SHA-256 校验文件，先计算 ZIP 的哈希值，与校验文件中的值逐字符比较：
 
@@ -36,11 +57,19 @@ macOS 和 Linux 不属于当前 Windows 正式发行版的支持范围。仓库�
 Get-FileHash .\PaperVault-v1.2.0-rc.1-windows-x64.zip -Algorithm SHA256
 ```
 
-完整解压预览包，在解压目录中打开 PowerShell，使用独立数据目录启动：
+建议先使用独立数据目录试用。Windows 在解压目录中打开 PowerShell：
 
 ```powershell
 .\PaperVault\PaperVault.exe --data-dir "$env:LOCALAPPDATA\PaperVault-Preview"
 ```
+
+macOS 将应用放入“应用程序”后，在终端运行：
+
+```bash
+open /Applications/PaperVault.app --args --data-dir "$HOME/Library/Application Support/PaperVault-Preview"
+```
+
+运行前先退出已打开的 PaperVault，确保这次启动使用指定参数。
 
 这样会创建一份独立的试用论文库。可导入少量测试 PDF，也可以先在稳定版导出 `.pvault`，再将其恢复到试用库中；恢复操作会替换试用库。API Key 需在候选版中重新填写。
 
@@ -52,37 +81,48 @@ Get-FileHash .\PaperVault-v1.2.0-rc.1-windows-x64.zip -Algorithm SHA256
 4. 生成本地结构索引；已配置模型服务时，再检查双语摘要与翻译。
 5. 导出 `.pvault`，恢复到另一个空的试用目录，核对论文、PDF 和笔记，再导入一篇新 PDF。
 
-试用结束后，关闭候选版，正常启动稳定版即可继续使用原论文库。上述流程是试用建议；具体构建的验证结果以随包说明为准。
+试用结束后，关闭候选版；Windows 用户可正常启动稳定版继续使用原论文库，macOS 用户可不带参数启动应用，回到默认论文库。上述流程是试用建议；具体构建的验证结果以随包说明为准。
 
 ## 升级与迁移
 
 ### 升级应用
 
-先在“备份与恢复”中导出一份资源包，关闭 PaperVault，再将新版 ZIP 解压到新目录并启动。程序目录与论文库目录彼此独立，替换程序不会覆盖默认数据目录。
+先在“备份与恢复”中导出一份资源包，再关闭 PaperVault。Windows 将新版 ZIP 解压到新目录并启动；macOS 用新版 `PaperVault.app` 替换“应用程序”中的旧版。程序目录与论文库目录彼此独立，替换程序不会覆盖默认数据目录。
 
 不要只复制 `PaperVault.exe`；一目录发行包依赖其旁边的文件。升级后需要回退旧版时，优先恢复对应版本的备份，避免旧版直接读取已升级的数据结构。
 
 ### 迁移到另一台电脑
 
-在原电脑导出 `.pvault` 资源包，在新电脑安装 PaperVault，再从“备份与恢复”导入。标准资源包包含数据库和 PDF；离线完整包还包含已有的预览资产与本地翻译模型。
+在原电脑导出 `.pvault` 资源包，在新电脑安装 PaperVault，再从“备份与恢复”导入。Windows 与 macOS 使用相同的资源包格式，无需手动修改数据库路径。标准资源包包含数据库和 PDF；离线完整包还包含已有的预览资产与本地翻译模型。
 
 **恢复会完整替换当前论文库，不会合并两边的数据。** 恢复前会自动创建备份，默认放在数据目录旁的 `PaperVault-backups/` 中。API Key 不随资源包迁移，新电脑需要重新配置模型服务。
 
 ## 更改数据目录
 
-Windows 桌面版默认把所有论文数据保存在：
+桌面版默认数据目录如下。在 macOS Finder 中可使用“前往 → 前往文件夹”并粘贴对应路径。
 
-```text
-%LOCALAPPDATA%\PaperVault
-```
+| 平台 | 默认目录 | 持久化目录配置 |
+| --- | --- | --- |
+| Windows | `%LOCALAPPDATA%\PaperVault` | `%LOCALAPPDATA%\PaperVault\desktop.json` |
+| macOS | `~/Library/Application Support/PaperVault` | `~/Library/Application Support/PaperVault/desktop.json` |
 
-如果要长期使用其他磁盘，在上述默认目录中创建 `desktop.json`，填写绝对路径：
+如果要长期使用其他磁盘，在平台默认目录中创建 `desktop.json`，填写绝对路径。例如 Windows：
 
 ```json
 {
   "data_dir": "D:\\PaperVaultData"
 }
 ```
+
+macOS 示例：
+
+```json
+{
+  "data_dir": "/Users/your-name/Documents/PaperVaultData"
+}
+```
+
+请将 `your-name` 替换为自己的 macOS 用户目录名。
 
 重新启动后，应用将使用指定目录。**修改路径只会切换当前论文库，不会自动移动已有资料。** 需要迁移时，先从旧目录导出资源包，切换目录后再恢复。
 
@@ -179,13 +219,19 @@ export PAPER_VAULT_CODESIGN_IDENTITY="Developer ID Application: Example Company 
 ./build-macos.sh
 ```
 
-构建脚本不会自动完成 Apple 公证。面向公开分发时，需另行完成签名、公证与票据附加；当前仓库未提供 macOS 自动发布任务。
+未设置签名身份时，PyInstaller 使用 ad hoc 签名。上述配置可指定 Developer ID 签名身份，但构建脚本不会自动完成 Apple 公证。面向公开分发时，需另行完成公证与票据附加。
 
-### GitHub Release
+### GitHub Actions macOS 构建
+
+[macOS Desktop Build 工作流](../.github/workflows/macos-build.yml) 在 macOS 15 的 Apple Silicon runner 上构建原生 arm64 应用。仓库维护者可在 Actions 页面手动运行；完成后，从对应运行页面的 **Artifacts → macos-arm64** 下载 ZIP、SHA-256 校验文件与验证记录。
+
+该工作流仅生成预览构建产物，不创建标签，也不发布 GitHub Release。Actions 产物有保留期限，过期后需要重新构建。
+
+### GitHub Release（Windows）
 
 发布前修改 `backend/__init__.py` 中的 `__version__`，并在 `CHANGELOG.md` 中添加对应的 `## [版本号] - 日期` 条目。Windows 文件属性与 macOS 应用版本由构建脚本自动生成，无需再手动维护第二份版本号。候选版使用 `1.2.0-rc.1` 这样的格式，也支持 `alpha.N` 和 `beta.N` 后缀。
 
-准备公开发布时，同步修改 README、本文和对应版本记录中的发行状态，确保 Release 正文不再写“本地预览，尚未发布”。只有发布新的稳定版时，才更新文档中的稳定版下载入口。
+准备公开发布时，同步修改 README、本文和对应版本记录中的发行状态，确保 Release 正文准确列出已发布的平台与安装包。只有发布新的稳定版时，才更新文档中的稳定版下载入口。
 
 推送 `v*` 标签后，[Desktop Release 工作流](../.github/workflows/windows-release.yml) 会先检查标签是否与源码版本完全一致，以及是否存在对应版本记录；检查通过后构建 Windows x64 ZIP。Release 正文只取该版本的变更，候选版会自动标记为 GitHub 预发布。例如，`v1.2.0-rc.1` 只使用 `[1.2.0-rc.1]` 条目，不包含未发布内容和其他版本的历史。
 
@@ -196,7 +242,7 @@ export PAPER_VAULT_CODESIGN_IDENTITY="Developer ID Application: Example Company 
 .\.venv\Scripts\python.exe tools\release_notes.py --version v1.2.0-rc.1
 ```
 
-如果找不到对应版本，生成过程会报错，以免发布空白或错误的说明。本地生成版本记录、构建 EXE 或创建 ZIP 都不会发布到 GitHub；推送版本标签才会触发远端发布。
+如果找不到对应版本，生成过程会报错，以免发布空白或错误的说明。本地构建和手动运行 macOS 工作流都不会发布到 GitHub Releases；推送版本标签才会触发现有的 Windows 远端发布流程。macOS 预览构建目前独立于该标签发布流程。
 
 ## 桌面版与 Web 版的关系
 
