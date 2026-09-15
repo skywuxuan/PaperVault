@@ -36,7 +36,9 @@ class EnvironmentConfigurationTestCase(unittest.TestCase):
             )
             environment = {"PAPER_VAULT_API_KEY": "shell-secret"}
             loaded = load_local_environment(root, environment)
-        self.assertEqual(loaded, root / ".env.local")
+        # macOS tempfile paths may pass through /private; compare canonical paths
+        # so the same configuration contract is tested on every runner.
+        self.assertEqual(loaded, (root / ".env.local").resolve())
         self.assertEqual(environment["PAPER_VAULT_API_KEY"], "shell-secret")
         self.assertEqual(
             Path(environment["PAPER_VAULT_DATA_DIR"]),

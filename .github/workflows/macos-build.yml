@@ -66,8 +66,10 @@ jobs:
           app = Path("dist/PaperVault.app")
           plist = plistlib.loads((app / "Contents/Info.plist").read_bytes())
           version = os.environ["EXPECTED_VERSION"]
-          assert plist["CFBundleShortVersionString"] == version.rsplit("-", 1)[0]
-          assert plist["CFBundleVersion"] == "1.2.0fc1"
+          from tools.desktop_version import read_version
+          expected = read_version().macos_plist()
+          assert plist["CFBundleShortVersionString"] == expected["CFBundleShortVersionString"]
+          assert plist["CFBundleVersion"] == expected["CFBundleVersion"]
           assert plist["LSMinimumSystemVersion"] == "14.0"
           subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
           PY
