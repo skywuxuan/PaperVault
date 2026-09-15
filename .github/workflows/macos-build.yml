@@ -1,6 +1,12 @@
 name: macOS Desktop Build
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build (default: caller ref)"
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       ref:
@@ -54,7 +60,7 @@ jobs:
           export EXPECTED_VERSION="$version"
           archive="dist/PaperVault-v${version}-macos-arm64.zip"
           ditto -c -k --sequesterRsrc --keepParent dist/PaperVault.app "$archive"
-          shasum -a 256 "$archive" > "${archive}.sha256"
+          (cd dist && shasum -a 256 "$(basename "$archive")") > "${archive}.sha256"
           archs="$(file dist/PaperVault.app/Contents/MacOS/PaperVault)"
           grep -q 'arm64' <<< "$archs"
           .venv/bin/python - <<'PY'
