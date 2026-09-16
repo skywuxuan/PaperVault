@@ -1,18 +1,49 @@
 # 版本记录
 
-这里记录 PaperVault 的用户可见变化。当前 Windows 稳定版为 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)；`v1.2.0-rc.1` 为 Windows 与 Apple Silicon Mac 的候选版，尚未上传 GitHub Releases。安装和升级方式见[桌面版指南](docs/DESKTOP.md)。
+这里记录 PaperVault 的用户可见变化。最新候选版为 [v1.2.0-rc.2](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2)，Windows 与 Apple Silicon Mac 下载位于同一发行页；Windows 稳定版为 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)。安装和升级方式见[桌面版指南](docs/DESKTOP.md)。
 
 ## [Unreleased]
 
-暂无候选版之外的变更。
+暂无未发布的变更。
+
+## [1.2.0-rc.2] - 2026-09-16
+
+本次候选版精简论文库与阅读器，修正解析来源按钮和英文摘要查词交互。Windows 桌面版、Apple Silicon Mac 桌面版与同版本 Web 服务共用前端和后端代码。
+
+### 下载与使用
+
+| 平台 | 下载 | 打开方式 |
+| --- | --- | --- |
+| Windows 10/11 x64 | [PaperVault-v1.2.0-rc.2-windows-x64.zip](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-windows-x64.zip) | 完整解压后运行 `PaperVault\PaperVault.exe` |
+| macOS 14+ · Apple Silicon | [PaperVault-v1.2.0-rc.2-macos-arm64.zip](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-macos-arm64.zip) | 解压后将 `PaperVault.app` 拖入“应用程序” |
+
+- 两个平台的 ZIP 与 SHA-256 校验文件位于本次 Release 的 Assets 中。
+- **Windows 为便携包**：保留 EXE 旁的 `_internal` 等全部文件，不要直接在压缩包中运行。无需安装 Python，但需要系统具备 Microsoft Edge WebView2 Runtime。程序不会自动创建快捷方式或出现在“已安装的应用”中；可手动为 `PaperVault.exe` 创建桌面快捷方式。
+- **macOS 包使用 ad hoc 签名，尚未进行 Developer ID 签名和 Apple 公证**；首次打开可能需要按系统提示允许打开。仅提供 Apple Silicon arm64 包。
+- 升级前导出 `.pvault` 备份并关闭旧版，再解压或替换程序。Windows 升级到新目录后请更新快捷方式。默认数据目录仍为 `%LOCALAPPDATA%\PaperVault`（Windows）与 `~/Library/Application Support/PaperVault`（Mac）。
+- Windows 卸载时删除程序文件夹与快捷方式即可；Mac 删除 `PaperVault.app` 即可。保留数据目录以保留论文库。
+
+### 界面与交互
+
+- 论文库改为紧凑布局，作者过多时单行省略，避免作者数量撑高论文项；标题最多两行。
+- “摘要预览”缩为作者同行的小按钮，展开或收起时按钮保持原位，内容在下方显示。
+- 阅读器有默认摘要时显示“默认解析”，没有时显示“生成摘要”；有豆包内容时显示“豆包解析”，没有时显示“导入豆包”。已有内容可直接点击对应按钮切换，来源名称保持固定，并高亮当前来源。
+- 移除阅读器中重复的来源切换、模型标记、“双语阅读”“阅读器就绪”和“段落已对齐”等提示，减少工具栏占用。
+- 英文摘要单击只选择并对齐段落，双击单词才打开词典；默认解析与豆包解析使用相同交互。
+- 移除论文库中重复的“标签管理”入口，保留“管理标签”，将侧栏“按主题整理”改为“标签类别”。
+
+### 构建与文档
+
+- 统一从同一个 Git 提交构建 Windows x64 与 macOS arm64，校验包内前端与源码内容一致，并将两平台附件放入同一份 Release 草稿，核对后公开发布。
+- 更新 README 与桌面指南，直接提供本版双平台下载入口，补充便携版再次打开、创建快捷方式、升级与卸载保留资料的说明。
 
 ## [1.2.0-rc.1] - 2026-09-15
 
-本次候选版重新整理了论文库与阅读器的界面，重点改善笔记保存、摘要任务恢复和资料迁移的可靠性，并加入 Apple Silicon Mac 桌面预览构建。**候选版尚未上传 GitHub Releases；Windows 稳定发行包仍是 v1.1.0。**
+本次候选版重新整理了论文库与阅读器的界面，重点改善笔记保存、摘要任务恢复和资料迁移的可靠性，并加入 Apple Silicon Mac 桌面预览构建。Windows 与 macOS 包保留在 [v1.2.0-rc.1 历史发行页](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.1)。
 
 ### 试用与数据保护
 
-- 本地 Windows x64 预览包命名为 `PaperVault-v1.2.0-rc.1-windows-x64.zip`。完整解压后运行 `PaperVault\PaperVault.exe`；不要直接从压缩包中运行，也不要只复制 EXE。
+- Windows x64 预览包命名为 `PaperVault-v1.2.0-rc.1-windows-x64.zip`。完整解压后运行 `PaperVault\PaperVault.exe`；不要直接从压缩包中运行，也不要只复制 EXE。
 - Apple Silicon Mac 预览包命名为 `PaperVault-v1.2.0-rc.1-macos-arm64.zip`，解压后将完整的 `PaperVault.app` 放入“应用程序”。[构建运行记录](https://github.com/skywuxuan/PaperVault/actions/runs/34952729621)已验证 arm64、macOS 14.0 最低版本声明和 ad hoc 签名；未完成 Developer ID 签名和 Apple 公证。
 - 建议通过 `--data-dir` 指定独立试用目录，并导入旧版导出的 `.pvault` 资源包。例如在解压目录中运行 `PaperVault\PaperVault.exe --data-dir "D:\PaperVault-Preview"`。
 - 需要使用原论文库时，先用旧版导出备份，再关闭旧版并启动候选版。两个版本不要同时操作同一数据目录。
@@ -93,6 +124,8 @@ PaperVault 首个 Windows 桌面正式版，将本地论文库和双语阅读器
 - 未配置模型时可使用本地结构索引；详细双语摘要需要在“模型设置”中配置 OpenAI 兼容接口。
 - 程序与用户数据分开存放，替换发行包不会覆盖默认数据目录。
 
-[Unreleased]: https://github.com/skywuxuan/PaperVault/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/skywuxuan/PaperVault/compare/v1.2.0-rc.2...HEAD
+[1.2.0-rc.2]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2
+[1.2.0-rc.1]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.1
 [1.1.0]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0
 [1.0.0]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.0.0
