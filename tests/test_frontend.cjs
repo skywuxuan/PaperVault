@@ -17,10 +17,27 @@ function app() {
   const document = {
     body: { classList: { add() {}, remove() {}, toggle() {} } },
     querySelector: selector => {
-      if (!nodes.has(selector)) nodes.set(selector, {
-        value: '', textContent: '', hidden: false, disabled: false,
-        replaceChildren() {}, focus() {}, querySelectorAll() { return []; },
-      });
+      if (!nodes.has(selector)) {
+        const classes = new Set();
+        const attributes = new Map();
+        nodes.set(selector, {
+          value: '', textContent: '', hidden: false, disabled: false,
+          replaceChildren() {}, focus() {}, querySelectorAll() { return []; },
+          setAttribute(name, value) { attributes.set(name, String(value)); },
+          getAttribute(name) { return attributes.get(name) ?? null; },
+          classList: {
+            add(...names) { names.forEach(name => classes.add(name)); },
+            remove(...names) { names.forEach(name => classes.delete(name)); },
+            contains(name) { return classes.has(name); },
+            toggle(name, force) {
+              const active = force ?? !classes.has(name);
+              if (active) classes.add(name);
+              else classes.delete(name);
+              return active;
+            },
+          },
+        });
+      }
       return nodes.get(selector);
     },
     querySelectorAll() { return []; },
@@ -497,4 +514,89 @@ test('switching summary sources hides the native translation action and clears s
   assert.equal(run('state.summarySelection'), null);
   run("state.activeSummarySource = 'native'; renderActiveSummarySource();");
   assert.equal(run("$('#translateSummaryButton').hidden"), false);
+});
+
+test('English summary clicks select a paragraph and dictionary lookup requires a double click', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../frontend/app.js'), 'utf8');
+  const segment = source.slice(source.indexOf('function summarySegment'), source.indexOf('function appendSummaryText'));
+  const external = source.slice(source.indexOf('function decorateExternalBlock'), source.indexOf('function activateExternalTerm'));
+  assert.match(segment, /segment\.addEventListener\("dblclick"[\s\S]*activateTerm/);
+  assert.doesNotMatch(segment.slice(segment.indexOf('segment.addEventListener("click"'), segment.indexOf('segment.addEventListener("dblclick"')), /activateTerm|showEnglishTermAtEvent/);
+  assert.match(external, /node\.addEventListener\("dblclick"[\s\S]*activateExternalTerm/);
+  assert.doesNotMatch(external.slice(external.indexOf('node.addEventListener("click"'), external.indexOf('node.addEventListener("dblclick"')), /activateExternalTerm|showEnglishTermAtEvent/);
+});
+
+test('summary source buttons keep their labels and source when clicked repeatedly', () => {
+  const { context, run, nodes } = app();
+  const renderedSources = [];
+  context.renderActiveSummarySource = () => renderedSources.push(run('state.activeSummarySource'));
+  run(`state.currentPaper = { summary_blocks: [{}], summary_variants: [{ id: 'd', provider: 'doubao' }] };
+    renderSummarySourceControls();`);
+
+  for (const [action, expectedSource] of [
+    ['handleDoubaoAction()', 'doubao'],
+    ['handleDoubaoAction()', 'doubao'],
+    ['handleNativeSummaryAction()', 'native'],
+    ['handleNativeSummaryAction()', 'native'],
+    ['handleDoubaoAction()', 'doubao'],
+  ]) {
+    run(action);
+    assert.equal(run('state.activeSummarySource'), expectedSource);
+    assert.equal(renderedSources.at(-1), expectedSource);
+    assert.equal(nodes.get('#summaryActionLabel').textContent, '默认解析');
+    assert.equal(nodes.get('#doubaoImportLabel').textContent, '豆包解析');
+    assert.equal(nodes.get('#regenerateButton').classList.contains('active-source'), expectedSource === 'native');
+    assert.equal(nodes.get('#doubaoImportButton').classList.contains('active-source'), expectedSource === 'doubao');
+    assert.equal(nodes.get('#regenerateButton').getAttribute('aria-pressed'), String(expectedSource === 'native'));
+    assert.equal(nodes.get('#doubaoImportButton').getAttribute('aria-pressed'), String(expectedSource === 'doubao'));
+  }
+});
+
+test('missing summaries use generation and import actions independently', () => {
+  const { context, run, nodes } = app();
+  const calls = [];
+  context.regenerateSummary = () => calls.push('generate');
+  context.showDoubaoImportDialog = () => calls.push('import');
+  context.renderActiveSummarySource = () => { throw new Error('An absent source must not be selected'); };
+  run(`state.currentPaper = { summary_variants: [{ id: 'd', provider: 'doubao' }] };
+    state.activeSummarySource = 'doubao'; renderSummarySourceControls(); handleNativeSummaryAction();`);
+  assert.equal(nodes.get('#summaryActionLabel').textContent, '生成摘要');
+  assert.equal(nodes.get('#doubaoImportLabel').textContent, '豆包解析');
+  assert.equal(run('state.activeSummarySource'), 'doubao');
+  assert.equal(nodes.get('#regenerateButton').classList.contains('active-source'), false);
+  run(`state.currentPaper = { summary_pairs: [{}], summary_variants: [] };
+    state.activeSummarySource = 'native'; renderSummarySourceControls(); handleDoubaoAction();`);
+  assert.equal(nodes.get('#summaryActionLabel').textContent, '默认解析');
+  assert.equal(nodes.get('#doubaoImportLabel').textContent, '导入豆包');
+  assert.equal(run('state.activeSummarySource'), 'native');
+  assert.equal(nodes.get('#doubaoImportButton').classList.contains('active-source'), false);
+  assert.deepEqual(calls, ['generate', 'import']);
+});
+
+test('refreshing source controls synchronizes both buttons after import, navigation, or a missing variant', () => {
+  const { run, nodes } = app();
+  run(`state.currentPaper = { summary_pairs: [{}], summary_variants: [] };
+    renderSummarySourceControls();
+    state.currentPaper.summary_variants = [{ id: 'imported', provider: 'doubao' }];
+    state.activeSummarySource = 'doubao'; state.activeSummaryVariantId = 'imported';
+    renderSummarySourceControls();`);
+  assert.equal(nodes.get('#regenerateButton').classList.contains('active-source'), false);
+  assert.equal(nodes.get('#doubaoImportButton').classList.contains('active-source'), true);
+  assert.equal(nodes.get('#doubaoImportLabel').textContent, '豆包解析');
+  run(`state.currentPaper.summary_variants = []; renderSummarySourceControls();`);
+  assert.equal(run('state.activeSummarySource'), 'native');
+  assert.equal(run('state.activeSummaryVariantId'), null);
+  assert.equal(nodes.get('#regenerateButton').classList.contains('active-source'), true);
+  assert.equal(nodes.get('#doubaoImportButton').classList.contains('active-source'), false);
+  assert.equal(nodes.get('#doubaoImportLabel').textContent, '导入豆包');
+  run(`state.currentPaper = {}; renderSummarySourceControls();`);
+  assert.equal(nodes.get('#summaryActionLabel').textContent, '生成摘要');
+  assert.equal(nodes.get('#regenerateButton').getAttribute('aria-pressed'), 'false');
+  assert.equal(nodes.get('#doubaoImportButton').getAttribute('aria-pressed'), 'false');
+});
+
+test('the library offers one tag management entry and uses the category label', () => {
+  const htmlSource = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8');
+  assert.doesNotMatch(htmlSource, /id="manageTagsButton"/);
+  assert.match(htmlSource, />标签类别</);
 });

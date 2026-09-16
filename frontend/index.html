@@ -44,7 +44,6 @@
     </a>
     <div class="header-actions">
       <button class="secondary-button header-word-button" id="vocabularyButton" type="button" title="单词本" aria-label="单词本"><svg class="ui-icon" aria-hidden="true"><use href="#icon-book"></use></svg> 单词本</button>
-      <button class="secondary-button header-tag-button" id="manageTagsButton" type="button" title="标签管理" aria-label="标签管理"><svg class="ui-icon" aria-hidden="true"><use href="#icon-tag"></use></svg> 标签管理</button>
       <button class="secondary-button header-resource-button" id="resourcePackageButton" type="button" title="备份与恢复" aria-label="备份与恢复"><svg class="ui-icon" aria-hidden="true"><use href="#icon-archive"></use></svg> 备份与恢复</button>
       <button class="icon-button" id="settingsButton" type="button" title="模型设置" aria-label="模型设置"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"></use></svg></button>
       <button class="primary-button" id="uploadButton" type="button" title="导入 PDF" aria-label="导入 PDF"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg> 导入 PDF</button>
@@ -62,7 +61,7 @@
         <span>全部论文</span>
         <span id="allPaperCount" class="filter-count">0</span>
       </button>
-      <div class="sidebar-section-title">按主题整理</div>
+      <div class="sidebar-section-title">标签类别</div>
       <div id="tagFilters" class="tag-filters"></div>
       <button id="sidebarManageTagsButton" class="sidebar-manage-button" type="button"><span aria-hidden="true">+</span> 管理标签</button>
       <div class="sidebar-section-title">摘要状态</div>
@@ -165,13 +164,13 @@
         <div id="readerMeta" class="reader-meta"></div>
       </div>
       <div class="reader-actions">
-        <button id="regenerateButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-refresh"></use></svg> 生成摘要</button>
-        <button id="doubaoImportButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-spark"></use></svg> 豆包解析</button>
+        <button id="regenerateButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-refresh"></use></svg> <span id="summaryActionLabel">生成摘要</span></button>
+        <button id="doubaoImportButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-spark"></use></svg> <span id="doubaoImportLabel">豆包解析</span></button>
         <button id="notesButton" class="secondary-button notes-launch-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-note"></use></svg> 我的笔记</button>
         <button id="editPaperButton" class="secondary-button" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-edit"></use></svg> 编辑</button>
       </div>
     </div>
-    <nav class="reader-modebar" aria-label="阅读模式">
+    <nav class="reader-modebar" aria-label="阅读模式" aria-hidden="true">
         <div class="reader-mode-tabs" role="tablist" aria-label="论文阅读模式">
           <button class="active" type="button" role="tab" aria-selected="true" data-reader-mode="deep"><svg class="ui-icon" aria-hidden="true"><use href="#icon-book"></use></svg> 双语阅读</button>
         </div>
@@ -210,7 +209,7 @@
               <button type="button" class="active" data-summary-source="native">论文摘要</button>
               <button type="button" data-summary-source="doubao">豆包解析</button>
             </div>
-            <span id="summaryStatus" class="status-pill"></span>
+            <span id="summaryStatus" class="status-pill" aria-hidden="true"></span>
             <button class="panel-collapse-button" type="button" data-collapse-panel="english" title="折叠英文摘要" aria-label="折叠英文摘要" aria-expanded="true">−</button>
           </div>
         </div>
@@ -220,7 +219,7 @@
         <div class="panel-header">
           <div><span class="panel-index chinese-index">03</span><h2 id="chineseHeading">中文摘要</h2></div>
           <div class="summary-header-tools">
-            <span id="termLinkLabel" class="linked-label" title="单击任一侧句子可同步显示对应句"><i></i><b>句对联动</b></span>
+            <span id="termLinkLabel" class="linked-label" title="单击任一侧句子可同步显示对应句" aria-hidden="true"><i></i><b>句对联动</b></span>
             <button id="translateSummaryButton" class="summary-translate-button" type="button" title="生成中文翻译" aria-label="生成中文翻译" hidden>&#8635;</button>
             <button id="downloadMarkdownButton" class="summary-download-button" type="button" title="下载 Markdown 摘要" aria-label="下载 Markdown 摘要">↓</button>
             <button class="panel-collapse-button" type="button" data-collapse-panel="chinese" title="折叠中文摘要" aria-label="折叠中文摘要" aria-expanded="true">−</button>

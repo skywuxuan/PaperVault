@@ -355,16 +355,25 @@ function renderLibrary() {
       setPaperReadState(paper.id, paper.read_state === "read" ? "unread" : "read").catch(handleError);
     });
     titleLine.append(make("span", "paper-type-mark", "PDF"), make("h2", "paper-title", paper.title), readButton);
-    content.append(titleLine, make("p", "paper-authors", paperAuthorDetails(paper)));
-    const details = make("details", "paper-details");
-    const detailsSummary = make("summary", "paper-details-toggle", "摘要预览");
+    // Keep the metadata row compact: the author list and the expandable abstract
+    // control share one line, while the full abstract remains available on demand.
+    const metaLine = make("div", "paper-meta-line");
+    metaLine.append(make("p", "paper-authors", paperAuthorDetails(paper)));
+    const detailsSummary = make("button", "paper-details-toggle", "摘要预览");
+    detailsSummary.type = "button";
+    detailsSummary.setAttribute("aria-expanded", "false");
+    const snippet = make("p", "paper-snippet", paperSnippet(paper));
+    snippet.id = `paper-snippet-${paper.id}`;
+    snippet.hidden = true;
+    detailsSummary.setAttribute("aria-controls", snippet.id);
+    detailsSummary.addEventListener("click", () => {
+      snippet.hidden = !snippet.hidden;
+      detailsSummary.setAttribute("aria-expanded", String(!snippet.hidden));
+    });
     const classification = make("span", "paper-tags paper-classification");
     paper.tags.forEach((tag) => classification.append(tagChip(tag)));
-    details.append(
-      detailsSummary,
-      make("p", "paper-snippet", paperSnippet(paper)),
-    );
-    content.append(details);
+    metaLine.append(detailsSummary, snippet);
+    content.append(titleLine, metaLine);
     if (paper.tags.length) content.append(classification);
 
     const facts = make("div", "paper-facts");
@@ -1860,15 +1869,60 @@ function renderSummarySourceControls() {
     state.activeSummaryVariantId = null;
   }
   if (!hasDoubao && state.activeSummarySource === "doubao") state.activeSummarySource = "native";
+  const nativeButton = $("#regenerateButton");
+  const nativeLabel = $("#summaryActionLabel");
+  if (nativeButton && nativeLabel) {
+    const available = hasNativeSummary();
+    const showingNative = available && state.activeSummarySource === "native";
+    nativeLabel.textContent = available ? "默认解析" : "生成摘要";
+    nativeButton.title = available ? "切换到默认解析" : "生成默认解析";
+    nativeButton.setAttribute("aria-label", nativeButton.title);
+    nativeButton.setAttribute("aria-pressed", String(showingNative));
+    nativeButton.classList.toggle("active-source", showingNative);
+  }
+  const doubaoButton = $("#doubaoImportButton");
+  if (doubaoButton) {
+    const showingDoubao = state.activeSummarySource === "doubao" && hasDoubao;
+    doubaoButton.title = hasDoubao ? "切换到豆包解析" : "导入豆包解析";
+    doubaoButton.setAttribute("aria-label", doubaoButton.title);
+    doubaoButton.setAttribute("aria-pressed", String(showingDoubao));
+    $("#doubaoImportLabel").textContent = hasDoubao ? "豆包解析" : "导入豆包";
+    doubaoButton.classList.toggle("active-source", showingDoubao);
+  }
   $$('[data-summary-source]').forEach((button) => {
     button.hidden = button.dataset.summarySource === "doubao" && !hasDoubao;
     button.classList.toggle("active", button.dataset.summarySource === state.activeSummarySource);
   });
 }
 
+function hasNativeSummary(paper = state.currentPaper) {
+  return Boolean(paper?.summary_blocks?.length || paper?.summary_pairs?.length);
+}
+
+function handleNativeSummaryAction() {
+  if (!hasNativeSummary()) {
+    regenerateSummary();
+    return;
+  }
+  state.activeSummarySource = "native";
+  renderSummarySourceControls();
+  renderActiveSummarySource();
+}
+
 function currentDoubaoVariant() {
   const variants = (state.currentPaper?.summary_variants || []).filter((variant) => variant.provider === "doubao");
   return variants.find((variant) => variant.id === state.activeSummaryVariantId) || variants[0] || null;
+}
+
+function handleDoubaoAction() {
+  const hasDoubao = (state.currentPaper?.summary_variants || []).some((variant) => variant.provider === "doubao");
+  if (!hasDoubao) {
+    showDoubaoImportDialog();
+    return;
+  }
+  state.activeSummarySource = "doubao";
+  renderSummarySourceControls();
+  renderActiveSummarySource();
 }
 
 function renderActiveSummarySource() {
@@ -2031,7 +2085,11 @@ function decorateExternalBlock(node, blockIndex, language) {
   node.addEventListener("click", (event) => {
     if (window.getSelection()?.toString().trim()) return;
     activateExternalBlock(blockIndex, node.dataset.language);
-    if (node.dataset.language === "en") activateExternalTerm(blockIndex, node, event);
+  });
+  node.addEventListener("dblclick", (event) => {
+    if (node.dataset.language !== "en") return;
+    event.preventDefault();
+    activateExternalTerm(blockIndex, node, event);
   });
   node.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -2664,9 +2722,11 @@ function structuredBlockElement(block, language, tagName) {
     if (event.target.closest("[data-page-ref]")) return;
     if (window.getSelection()?.toString().trim()) return;
     activateSummaryBlock(block.id, language);
-    if (language === "en") {
-      showEnglishTermAtEvent(event, block.text_en || "", block.text_zh || "", null);
-    }
+  });
+  node.addEventListener("dblclick", (event) => {
+    if (language !== "en" || event.target.closest("[data-page-ref]")) return;
+    event.preventDefault();
+    showEnglishTermAtEvent(event, block.text_en || "", block.text_zh || "", null);
   });
   node.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -2811,7 +2871,11 @@ function summarySegment(pair, index, language) {
     if (event.detail !== 1) return;
     if (window.getSelection()?.toString().trim()) return;
     activatePair(index, language);
-    if (language === "en") activateTerm(index, language, event);
+  });
+  segment.addEventListener("dblclick", (event) => {
+    if (language !== "en") return;
+    event.preventDefault();
+    activateTerm(index, language, event);
   });
   segment.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -3909,12 +3973,11 @@ function bindEvents() {
   $("#settingsButton").addEventListener("click", showSettingsDialog);
   $("#resourcePackageButton").addEventListener("click", () => showResourcePackageDialog().catch(handleError));
   $("#vocabularyButton").addEventListener("click", showVocabularyDialog);
-  $("#manageTagsButton").addEventListener("click", () => { renderTagManager(); openDialog("tagsDialog"); });
   $("#sidebarManageTagsButton").addEventListener("click", () => { renderTagManager(); openDialog("tagsDialog"); });
   $("#backButton").addEventListener("click", () => { location.hash = ""; });
   $("#editPaperButton").addEventListener("click", showEditDialog);
-  $("#regenerateButton").addEventListener("click", regenerateSummary);
-  $("#doubaoImportButton").addEventListener("click", showDoubaoImportDialog);
+  $("#regenerateButton").addEventListener("click", handleNativeSummaryAction);
+  $("#doubaoImportButton").addEventListener("click", handleDoubaoAction);
   $("#notesButton").addEventListener("click", openNotesDrawer);
   $("#closeNotesButton").addEventListener("click", closeNotesDrawer);
   $("#quoteSummarySelectionButton").addEventListener("click", () => {
