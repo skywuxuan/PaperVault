@@ -6,7 +6,11 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   validate-version:
@@ -25,7 +29,9 @@ jobs:
           python-version: "3.12"
 
       - name: Test package version metadata
-        run: python -m unittest discover -s tests -p test_desktop_version.py
+        run: |
+          python -m unittest discover -s tests -p test_desktop_version.py
+          python -m unittest discover -s tests -p test_verify_desktop_bundle.py
 
       - name: Verify release tag matches package version
         id: version
@@ -50,36 +56,77 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          architecture: x64
           cache: pip
-          cache-dependency-path: requirements-desktop.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Install desktop dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install -r requirements-desktop.txt
+
+      - name: Run Python regression tests
+        run: python -m unittest discover -s tests -q
+
+      - name: Check frontend syntax
+        run: node --check frontend/app.js
+
+      - name: Run frontend regression tests
+        run: node --test tests/test_frontend.cjs
 
       - name: Build Windows desktop bundle
         shell: pwsh
         run: .\build-windows.ps1 -SkipInstall
 
-      - name: Create release archive
+      - name: Verify frontend and Windows package metadata
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate-version.outputs.version }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          python tools/verify_desktop_bundle.py --platform windows-x64 --bundle dist/PaperVault --expected-git-sha "$env:RELEASE_SHA" --output "dist/PaperVault-v$env:RELEASE_VERSION-windows-x64-validation.json"
+
+      - name: Create release archive and checksum
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.validate-version.outputs.version }}
         run: |
           $archive = "dist\PaperVault-v$env:RELEASE_VERSION-windows-x64.zip"
           Compress-Archive -Path "dist\PaperVault" -DestinationPath $archive
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = "$hash  $([System.IO.Path]::GetFileName($archive))`n"
+          [System.IO.File]::WriteAllText((Join-Path $PWD "$archive.sha256"), $checksum, [System.Text.UTF8Encoding]::new($false))
 
       - name: Upload Windows archive
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: dist/PaperVault-*-windows-x64.zip
+          if-no-files-found: error
+          path: |
+            dist/PaperVault-*-windows-x64.zip
+            dist/PaperVault-*-windows-x64.zip.sha256
+            dist/PaperVault-*-windows-x64-validation.json
 
-  publish-release:
+  build-macos:
+    needs: [validate-version]
+    uses: ./.github/workflows/macos-build.yml
+    with:
+      ref: ${{ github.sha }}
+
+  prepare-release:
     runs-on: ubuntu-latest
-    needs: [validate-version, build-windows]
+    needs: [validate-version, build-windows, build-macos]
+    permissions:
+      contents: write
 
     steps:
       - name: Check out source
@@ -98,15 +145,48 @@ jobs:
       - name: Download release archives
         uses: actions/download-artifact@v4
         with:
-          pattern: "windows-x64"
+          pattern: "{windows-x64,macos-arm64}"
           path: dist
           merge-multiple: true
 
-      - name: Publish GitHub Release
+      - name: Verify both packages came from the release commit
+        env:
+          RELEASE_VERSION: ${{ needs.validate-version.outputs.version }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from tools.verify_desktop_bundle import verify_release_manifests
+          verify_release_manifests(Path("dist"), Path("."), os.environ["RELEASE_VERSION"], os.environ["RELEASE_SHA"])
+          PY
+
+      - name: Verify archives and combine checksums
+        env:
+          RELEASE_VERSION: ${{ needs.validate-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist
+          : > SHA256SUMS.txt
+          for platform in windows-x64 macos-arm64; do
+            archive="PaperVault-v${RELEASE_VERSION}-${platform}.zip"
+            test -s "$archive"
+            sha256sum --check "${archive}.sha256"
+            cat "${archive}.sha256" >> SHA256SUMS.txt
+          done
+          sha256sum --check SHA256SUMS.txt
+
+      - name: Upload both platforms to one draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: PaperVault ${{ github.ref_name }}
           body_path: release-notes.md
-          files: dist/PaperVault-*.zip
+          files: |
+            dist/PaperVault-*.zip
+            dist/PaperVault-*.zip.sha256
+            dist/PaperVault-*-validation.json
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          draft: true
           generate_release_notes: false
           prerelease: ${{ needs.validate-version.outputs.prerelease == 'true' }}

@@ -1,6 +1,12 @@
 name: macOS Desktop Build
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build (default: caller ref)"
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       ref:
@@ -45,47 +51,25 @@ jobs:
       - name: Build Apple Silicon app
         run: ./build-macos.sh --skip-install
 
-      - name: Package and validate artifact
-        id: package
+      - name: Verify frontend and macOS package metadata
         shell: bash
         run: |
           set -euo pipefail
           version="$(.venv/bin/python tools/desktop_version.py)"
-          export EXPECTED_VERSION="$version"
+          .venv/bin/python tools/verify_desktop_bundle.py \
+            --platform macos-arm64 \
+            --bundle dist/PaperVault.app \
+            --output "dist/PaperVault-v${version}-macos-arm64-validation.json"
+
+      - name: Create release archive and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(.venv/bin/python tools/desktop_version.py)"
           archive="dist/PaperVault-v${version}-macos-arm64.zip"
           ditto -c -k --sequesterRsrc --keepParent dist/PaperVault.app "$archive"
-          shasum -a 256 "$archive" > "${archive}.sha256"
-          archs="$(file dist/PaperVault.app/Contents/MacOS/PaperVault)"
-          grep -q 'arm64' <<< "$archs"
-          .venv/bin/python - <<'PY'
-          from pathlib import Path
-          import os
-          import plistlib
-          import subprocess
+          (cd dist && shasum -a 256 "$(basename "$archive")") > "${archive}.sha256"
 
-          app = Path("dist/PaperVault.app")
-          plist = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-          version = os.environ["EXPECTED_VERSION"]
-          from tools.desktop_version import read_version
-          expected = read_version().macos_plist()
-          assert plist["CFBundleShortVersionString"] == expected["CFBundleShortVersionString"]
-          assert plist["CFBundleVersion"] == expected["CFBundleVersion"]
-          assert plist["LSMinimumSystemVersion"] == "14.0"
-          subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
-          PY
-          {
-            echo "# macOS arm64 build validation"
-            echo
-            echo "- Version: ${version}"
-            echo "- Runner: macos-15 (Apple Silicon arm64)"
-            echo "- Minimum system declared in Info.plist: macOS 14.0"
-            echo "- Architecture: ${archs}"
-            echo "- Bundle: ${archive}"
-            echo "- SHA-256: $(cut -d ' ' -f 1 "${archive}.sha256")"
-            echo "- Code signature: codesign --verify --deep --strict passed"
-            echo "- Regression tests: passed in the build job"
-          } > dist/PaperVault-v${version}-macos-arm64-validation.md
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
@@ -94,4 +78,4 @@ jobs:
           path: |
             dist/PaperVault-v*-macos-arm64.zip
             dist/PaperVault-v*-macos-arm64.zip.sha256
-            dist/PaperVault-v*-macos-arm64-validation.md
+            dist/PaperVault-v*-macos-arm64-validation.json
