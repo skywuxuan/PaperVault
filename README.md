@@ -24,9 +24,9 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 本版标记为预发布；Windows 稳定版 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) 仍可下载。Windows ZIP 不会自动创建快捷方式，也不会出现在“已安装的应用”中；macOS 包使用 ad hoc 签名，尚未完成 Developer ID 签名与 Apple 公证。详见[安装、打开与卸载说明](docs/DESKTOP.md#安装与首次使用)。
 
-![PaperVault 论文库界面](docs/images/library-preview.png)
+![PaperVault Windows 桌面版 v1.2.0-rc.2 论文库](docs/images/library-preview.png)
 
-*图为 v1.2.0-rc.1 界面，使用演示数据；v1.2.0-rc.2 已进一步精简列表与阅读器，具体变化见下文。*
+*Windows 桌面版 v1.2.0-rc.2 实际界面；图中的论文与标签来自本地资料库。*
 
 ## 最近更新
 
@@ -46,6 +46,10 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 在同一个阅读器中查看 PDF、英文摘要和中文摘要。摘要支持段落联动、同步滚动与原文页码定位；PDF 支持缩放、跳页、文本选择和高亮批注。
 
 你也可以导入豆包公开分享页中的解析，保留标题、列表、表格和公式，并生成英文对照。阅读器顶部的“默认解析”和“豆包解析”分别展示两种内容；尚无内容时，对应按钮显示“生成摘要”或“导入豆包”。点击来源按钮只切换内容，不改变来源名称。
+
+![PaperVault 桌面阅读器：PDF 原文与默认解析的中英对照](docs/images/reader-preview.png)
+
+*三栏对照阅读：PDF 原文、英文摘要与中文摘要；顶部可切换默认解析和豆包解析。*
 
 ### 留下自己的理解
 
