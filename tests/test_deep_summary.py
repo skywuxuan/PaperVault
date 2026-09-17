@@ -546,6 +546,73 @@ class DeepSummaryTranslationTestCase(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertEqual(request.call_args.kwargs["task"], "translation")
 
+    def test_translation_request_declares_its_json_response_schema(self) -> None:
+        response = {
+            "translations": [
+                {"id": "heading-001", "text_zh": "评测结果"},
+                {"id": "paragraph-001", "text_zh": "WER 从 12.5% 改善到 9.1%。"},
+            ]
+        }
+        with patch(
+            "backend.deep_summary.request_chat_completion", return_value=completion(response)
+        ) as request:
+            translate_report_blocks(self.blocks, settings())
+        payload = request.call_args.args[0]
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        system_prompt = payload["messages"][0]["content"]
+        self.assertIn("Return strict JSON only", system_prompt)
+        schema_line = next(line for line in system_prompt.splitlines() if line.startswith('{"translations"'))
+        schema = json.loads(schema_line)
+        self.assertEqual(set(schema), {"translations"})
+        self.assertEqual(set(schema["translations"][0]), {"id", "text_zh"})
+
+    def test_translation_rejects_empty_or_non_text_values(self) -> None:
+        blocks = [self.blocks[0]]
+        for value in (None, "", " \n\t ", 123, False, [], {"text": "评测结果"}):
+            with self.subTest(value=value):
+                response = {"translations": [{"id": blocks[0]["id"], "text_zh": value}]}
+                with patch(
+                    "backend.deep_summary.request_chat_completion",
+                    return_value=completion(response),
+                ):
+                    with self.assertRaisesRegex(SummaryError, "Translation was empty or non-text"):
+                        translate_report_blocks(blocks, settings())
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            return_value=completion({"translations": [{"id": blocks[0]["id"]}]}),
+        ):
+            with self.assertRaisesRegex(SummaryError, "Translation was empty or non-text"):
+                translate_report_blocks(blocks, settings())
+        self.assertNotIn("text_zh", blocks[0])
+
+    def test_translation_rejects_non_object_and_extra_entries_without_leaking_errors(self) -> None:
+        blocks = [self.blocks[0]]
+        valid = {"id": blocks[0]["id"], "text_zh": "评测结果"}
+        invalid_arrays = [[None], ["评测结果"], [42], [False], [valid, None], [None, valid], [valid, valid]]
+        for entries in invalid_arrays:
+            with self.subTest(entries=entries):
+                with patch(
+                    "backend.deep_summary.request_chat_completion",
+                    return_value=completion({"translations": entries}),
+                ):
+                    with self.assertRaisesRegex(SummaryError, "Translation response contained invalid block entries"):
+                        translate_report_blocks(blocks, settings())
+
+    def test_translation_retries_invalid_entries_then_accepts_valid_response(self) -> None:
+        blocks = [self.blocks[0]]
+        valid = {"id": blocks[0]["id"], "text_zh": "评测结果"}
+        with patch(
+            "backend.deep_summary.request_chat_completion",
+            side_effect=[
+                completion({"translations": [valid, None]}),
+                completion({"translations": [valid]}),
+            ],
+        ) as request:
+            merged, _ = translate_report_blocks(blocks, settings())
+        self.assertEqual(merged[0]["text_zh"], "评测结果")
+        self.assertEqual(request.call_count, 2)
+        self.assertIn("invalid block entries", request.call_args.args[0]["messages"][1]["content"])
+
     def test_large_translation_starts_with_independent_chunks(self) -> None:
         blocks = [
             {

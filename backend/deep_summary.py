@@ -124,7 +124,11 @@ should be concise and suitable for a researcher brief. Keep paragraphs coherent,
 explanatory, and selective rather than producing telegraphic fragments or literal
 sentence-by-sentence translations.
 
-Return no English blocks, page references, markdown or commentary."""
+Return strict JSON only with exactly this shape:
+{"translations": [{"id": "supplied-block-id", "text_zh": "Chinese translation"}]}
+Include exactly one object for every supplied block, in the supplied order. Copy each
+block ID exactly and provide a non-empty string in text_zh. Do not return null,
+additional blocks, English blocks, page references, markdown fences or commentary."""
 
 
 JSON_REPAIR_PROMPT = """Repair the supplied response into valid strict JSON without adding, removing,
@@ -664,16 +668,18 @@ def _parse_translation_candidate(
         raw = data["blocks"]
     if not isinstance(raw, list):
         raise SummaryError("Translation response did not contain a translations array")
+    if len(raw) != len(blocks) or any(not isinstance(item, dict) for item in raw):
+        raise SummaryError("Translation response contained invalid block entries")
     expected_ids = [block["id"] for block in blocks]
-    actual_ids = [str(item.get("id", "")) for item in raw if isinstance(item, dict)]
+    actual_ids = [item.get("id") for item in raw]
     if actual_ids != expected_ids:
         raise SummaryError("Translation block IDs or order did not match the English report")
     translations: list[dict[str, str]] = []
     for block, item in zip(blocks, raw, strict=True):
-        text_zh = str(item.get("text_zh", "")).strip()
-        if not text_zh:
-            raise SummaryError(f"Translation was empty for block {block['id']}")
-        translations.append({"id": block["id"], "text_zh": text_zh})
+        text_zh = item.get("text_zh")
+        if not isinstance(text_zh, str) or not text_zh.strip():
+            raise SummaryError(f"Translation was empty or non-text for block {block['id']}")
+        translations.append({"id": block["id"], "text_zh": text_zh.strip()})
     return translations
 
 

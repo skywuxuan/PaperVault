@@ -18,6 +18,7 @@ const state = {
   libraryFacets: { total: 0, summary: {}, rating: {} },
   selectedPaperIds: new Set(),
   summaryRetryIds: new Set(),
+  summaryTranslationIds: new Set(),
   batchRunning: false,
   currentPaper: null,
   activeSummarySource: "native",
@@ -1850,8 +1851,8 @@ function renderReader() {
     ? "单击任一侧段落可将对应译文对齐到相同高度"
     : "单击任一侧句子可同步显示对应句";
   const translateButton = $("#translateSummaryButton");
-  translateButton.hidden = !usesBlocks || paper.summary_translation_status === "ready";
-  translateButton.disabled = paper.summary_status === "translating";
+  translateButton.hidden = !usesBlocks || nativeTranslationState(paper) === "ready";
+  translateButton.disabled = nativeTranslationState(paper) === "translating";
   translateButton.title = paper.summary_status === "translation_error"
     ? "仅重新翻译中文，不重新运行英文分析"
     : "生成中文翻译";
@@ -1945,7 +1946,8 @@ function renderActiveSummarySource() {
         ? `英文分析：${paper.summary_analysis_model || paper.summary_model || "未记录"}；中文翻译：${paper.summary_translation_model || "未记录"}`
         : `摘要来源：${summarySource(paper)}（未调用外部模型）`;
       const usesBlocks = Boolean(paper.summary_blocks?.length);
-      $("#translateSummaryButton").hidden = !usesBlocks || paper.summary_translation_status === "ready";
+      $("#translateSummaryButton").hidden = !usesBlocks || nativeTranslationState(paper) === "ready";
+      $("#translateSummaryButton").disabled = nativeTranslationState(paper) === "translating";
       $("#termLinkLabel b").textContent = usesBlocks ? "段落联动" : "句对联动";
       $("#termLinkLabel").title = usesBlocks
         ? "单击任一侧段落可将对应译文对齐到相同高度"
@@ -2667,6 +2669,51 @@ function renderSummaries(pairs, error = "", visualAssets = [], paperId = "", blo
   renderMarkdownReport(chinese, pairs, "zh", visualAssets, paperId);
 }
 
+function nativeTranslationState(paper) {
+  if (paper?.summary_status === "translating" || paper?.summary_translation_status === "translating") return "translating";
+  if (paper?.summary_status === "translation_error" || paper?.summary_translation_status === "error") return "error";
+  return paper?.summary_blocks?.length && paper.summary_blocks.every((block) => String(block.text_zh || "").trim())
+    ? "ready" : "pending";
+}
+
+function renderTranslationNotice(container, paper) {
+  const status = nativeTranslationState(paper);
+  if (status === "ready") return;
+  const interrupted = paper.summary_translation_error_code === "translation_request_interrupted";
+  const notice = make("div", `translation-notice ${status}`);
+  notice.setAttribute("role", status === "error" ? "alert" : "status");
+  const titles = { translating: "正在翻译中文", error: interrupted ? "中文翻译状态待确认" : "中文翻译未完成", pending: "中文翻译尚未生成" };
+  const messages = {
+    translating: state.summaryTranslationIds.has(paper.id)
+      ? "英文报告和已有译文仍可阅读，完成后会自动更新。"
+      : "服务正在处理，英文报告和已有译文仍可阅读。可稍后刷新状态查看结果。",
+    error: paper.summary_translation_error || "翻译未成功，英文报告和已有译文已保留。请重试。",
+    pending: "英文报告已就绪，可以直接生成中文译文。",
+  };
+  notice.append(make("strong", "translation-notice-title", titles[status]), make("p", "", messages[status]));
+  const actions = make("div", "translation-notice-actions");
+  if (status !== "translating" && !interrupted) {
+    const retry = make("button", "secondary-button", status === "error" ? "重试中文翻译" : "生成中文翻译");
+    retry.type = "button";
+    retry.addEventListener("click", () => retrySummaryTranslation({ paper }));
+    actions.append(retry);
+    if (status === "error") {
+      const settings = make("button", "secondary-button", "模型设置");
+      settings.type = "button";
+      settings.addEventListener("click", showSettingsDialog);
+      actions.append(settings);
+    }
+  }
+  if (!state.summaryTranslationIds.has(paper.id) && (status === "translating" || interrupted)) {
+    const refresh = make("button", "secondary-button", "刷新状态");
+    refresh.type = "button";
+    refresh.addEventListener("click", () => refreshSummaryTranslationStatus(paper));
+    actions.append(refresh);
+  }
+  if (actions.childElementCount) notice.append(actions);
+  container.append(notice);
+}
+
 function renderStructuredReport(container, blocks, language) {
   const heading = make("header", "markdown-document-heading structured-document-heading");
   heading.append(
@@ -2680,6 +2727,11 @@ function renderStructuredReport(container, blocks, language) {
   const reportTitle = state.currentPaper?.summary_paper_title || state.currentPaper?.title;
   if (reportTitle) heading.append(make("p", "markdown-document-subtitle", reportTitle));
   container.append(heading);
+
+  if (language === "zh") {
+    renderTranslationNotice(container, state.currentPaper);
+    if (!blocks.some((block) => String(block.text_zh || "").trim())) return;
+  }
 
   let bulletList = null;
   for (const block of blocks) {
@@ -2715,7 +2767,7 @@ function structuredBlockElement(block, language, tagName) {
     node.append(textNode);
   } else {
     node.classList.add("translation-pending");
-    node.append(make("span", "structured-block-text", "中文翻译生成中…"));
+    node.append(make("span", "structured-block-text", language === "zh" ? "此段暂无中文译文" : "此段暂无英文内容"));
   }
   appendPageReferenceButtons(node, block.page_refs);
   node.addEventListener("click", (event) => {
@@ -3693,27 +3745,23 @@ async function retryFailedPaperSummary(paper) {
     return;
   }
   const translationOnly = paper.summary_status === "translation_error" && paper.summary_blocks?.length;
+  if (translationOnly) {
+    await retrySummaryTranslation({ paper });
+    return;
+  }
   state.summaryRetryIds.add(paper.id);
   cacheUpdatedPaper({
     ...paper,
-    summary_status: translationOnly ? "translating" : "generating",
-    summary_translation_status: translationOnly ? "translating" : paper.summary_translation_status,
+    summary_status: "generating",
     summary_error: "",
     summary_translation_error: "",
   });
   renderLibrary();
-  toast(translationOnly ? "正在重新生成中文翻译" : "正在重新生成英文摘要，完成后将继续翻译");
+  toast("正在重新生成英文摘要，完成后将继续翻译");
   try {
-    let result;
-    if (translationOnly) {
-      result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
-    } else {
-      result = await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
-      cacheUpdatedPaper(result.paper);
-      result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
-    }
+    const result = await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
     cacheUpdatedPaper(result.paper);
-    toast(translationOnly ? "中文翻译已完成" : "双语研究摘要已重新生成");
+    await retrySummaryTranslation({ quietStart: true, paper: result.paper });
   } catch (error) {
     if (error.data?.paper) cacheUpdatedPaper(error.data.paper);
     handleError(error);
@@ -3724,27 +3772,64 @@ async function retryFailedPaperSummary(paper) {
 }
 
 async function retrySummaryTranslation({ quietStart = false, paper = state.currentPaper } = {}) {
-  if (!paper?.summary_blocks?.length || paper.summary_status === "translating") return;
+  if (!paper?.summary_blocks?.length || nativeTranslationState(paper) === "translating" || state.summaryTranslationIds.has(paper.id)) return;
+  if (paper.summary_translation_error_code === "translation_request_interrupted") {
+    await refreshSummaryTranslationStatus(paper);
+    return;
+  }
+  state.summaryTranslationIds.add(paper.id);
   cacheUpdatedPaper({
     ...paper,
     summary_status: "translating",
     summary_translation_status: "translating",
     summary_translation_error: "",
+    summary_translation_error_code: "",
   });
   if (state.currentPaper?.id === paper.id) renderReader();
   if (!quietStart) toast("正在重新生成中文翻译");
   try {
     const result = await api(`/api/papers/${paper.id}/translate-summary`, { method: "POST" });
+    if (result.paper?.id !== paper.id) throw new Error("翻译响应不完整，请刷新状态确认结果。");
     cacheUpdatedPaper(result.paper);
-    if (state.currentPaper?.id === paper.id) renderReader();
-    await loadLibrary();
     toast("中文翻译已完成");
   } catch (error) {
-    if (error.data?.paper) {
-      cacheUpdatedPaper(error.data.paper);
-      if (state.currentPaper?.id === paper.id) renderReader();
-      await loadLibrary().catch(() => {});
+    let recovered = error.data?.paper;
+    if (!recovered) {
+      // A lost response does not tell us whether the server finished the work.
+      recovered = await api(`/api/papers/${paper.id}`).then((result) => result.paper?.id === paper.id ? result.paper : null).catch(() => null);
     }
+    if (recovered && ["ready", "translating", "error"].includes(nativeTranslationState(recovered))) {
+      cacheUpdatedPaper(recovered);
+      if (nativeTranslationState(recovered) === "ready") toast("已同步服务中的中文译文");
+      else if (nativeTranslationState(recovered) === "translating") toast("翻译请求的连接已中断，服务仍在处理，可稍后刷新状态");
+      else handleError(error);
+    } else {
+      const message = "翻译请求中断，未能确认结果。已有内容已保留，请检查网络后刷新状态。";
+      const latest = state.currentPaper?.id === paper.id ? state.currentPaper : state.papers.find((item) => item.id === paper.id);
+      cacheUpdatedPaper({
+        ...(recovered || latest || paper),
+        summary_status: "translation_error",
+        summary_translation_status: "error",
+        summary_translation_error: message,
+        summary_translation_error_code: "translation_request_interrupted",
+      });
+      toast(message, "error");
+    }
+  } finally {
+    state.summaryTranslationIds.delete(paper.id);
+    if (state.currentPaper?.id === paper.id) renderReader();
+    await loadLibrary().catch(handleError);
+  }
+}
+
+async function refreshSummaryTranslationStatus(paper = state.currentPaper) {
+  if (!paper) return;
+  try {
+    const result = await api(`/api/papers/${paper.id}`);
+    if (result.paper?.id !== paper.id) throw new Error("未能读取翻译状态，请稍后刷新。");
+    cacheUpdatedPaper(result.paper);
+    if (state.currentPaper?.id === paper.id) renderReader();
+  } catch (error) {
     handleError(error);
   }
 }

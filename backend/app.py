@@ -1963,10 +1963,36 @@ def friendly_model_error(message: str) -> tuple[str, str]:
         "translation block ids or order" in lowered
         or "translation response ids" in lowered
         or "translations array" in lowered
+        or "translation response contained invalid block entries" in lowered
     ):
         return (
-            "中文翻译的段落 ID 或顺序不完整，英文报告已保留。请重新翻译。",
+            "中文翻译的段落结构不完整或格式无效，英文报告已保留。请重新翻译。",
             "translation_structure_error",
+        )
+    if "translation was empty" in lowered:
+        return (
+            "模型返回的中文翻译为空或格式无效，英文报告及已有译文已保留。请重新翻译。",
+            "translation_empty_response",
+        )
+    if "(400)" in lowered or "(422)" in lowered:
+        if any(term in lowered for term in ("response_format", "json_object", "json mode", "json_schema")):
+            return (
+                "模型服务拒绝了 JSON 输出格式，当前内容已保留。请确认模型支持 JSON 输出，并使用最新版本重试。",
+                "model_json_mode_error",
+            )
+        return (
+            "模型服务不接受当前请求格式或参数，当前内容已保留。请检查模型与接口的兼容性，或更新软件后重试。",
+            "model_request_rejected",
+        )
+    if "(403)" in lowered:
+        return (
+            "模型服务拒绝访问，当前内容已保留。请检查账户权限、模型授权或服务访问限制。",
+            "model_access_denied",
+        )
+    if "(404)" in lowered:
+        return (
+            "模型服务未找到请求的模型或接口，当前内容已保留。请核对 API 地址和模型名称。",
+            "model_not_found",
         )
     if "page-grounded" in lowered or "valid page references" in lowered:
         return (
@@ -2014,7 +2040,7 @@ def friendly_model_error(message: str) -> tuple[str, str]:
         return "模型响应超时，当前摘要没有被覆盖，请稍后重试。", "model_timeout"
     if "connection" in lowered or "urlopen" in lowered:
         return "无法连接模型服务，请检查 VPN、网络和 API 地址。", "model_unreachable"
-    return "模型生成失败，当前摘要没有被覆盖。请检查模型设置后重试。", "model_error"
+    return "模型请求未成功，当前内容已保留。请稍后重试；若仍失败，请提供错误代码以便排查。", "model_error"
 
 
 def retryable_external_translation_error(message: str) -> bool:

@@ -48,6 +48,46 @@ class FriendlyModelErrorTestCase(unittest.TestCase):
             "summary_evidence_validation_error",
         )
 
+    def test_translation_shape_and_empty_errors_have_specific_codes(self) -> None:
+        cases = (
+            ("Translation response contained invalid block entries", "translation_structure_error"),
+            ("Translation was empty for block paragraph-001", "translation_empty_response"),
+            ("Translation was empty or non-text for block paragraph-001", "translation_empty_response"),
+        )
+        for detail, expected_code in cases:
+            with self.subTest(detail=detail):
+                message, code = friendly_model_error(detail)
+                self.assertEqual(code, expected_code)
+                self.assertIn("英文报告", message)
+                self.assertIn("已保留", message)
+
+    def test_rejected_requests_have_safe_specific_errors(self) -> None:
+        cases = (
+            (400, "response_format is not supported", "model_json_mode_error"),
+            (400, "messages must contain json for json_object", "model_json_mode_error"),
+            (422, "JSON mode is unsupported", "model_json_mode_error"),
+            (400, "invalid parameter", "model_request_rejected"),
+            (422, "invalid JSON request body", "model_request_rejected"),
+            (403, "model permission denied", "model_access_denied"),
+            (404, "model not found", "model_not_found"),
+        )
+        for status, detail, expected_code in cases:
+            with self.subTest(status=status, detail=detail):
+                message, code = friendly_model_error(
+                    f"LLM request failed ({status}): {detail}; api_key=private-key-marker"
+                )
+                self.assertEqual(code, expected_code)
+                self.assertNotIn("private-key-marker", message)
+                self.assertNotIn(detail, message)
+                self.assertIn("已保留", message)
+
+    def test_unknown_error_does_not_assume_a_configuration_problem(self) -> None:
+        message, code = friendly_model_error("Unrecognized failure; api_key=private-key-marker")
+        self.assertEqual(code, "model_error")
+        self.assertNotIn("private-key-marker", message)
+        self.assertNotIn("模型设置", message)
+        self.assertIn("已保留", message)
+
     def test_complete_translation_outranks_newer_english_only_duplicate(self) -> None:
         translated = {
             "summary_blocks": [{"text_en": "Evidence", "text_zh": "证据"}],
@@ -612,6 +652,8 @@ class ApiTestCase(unittest.TestCase):
                 )
             self.assertEqual(status, 502)
             self.assertEqual(failed_data["paper"]["summary_status"], "translation_error")
+            self.assertEqual(failed_data["paper"]["summary_translation_status"], "error")
+            self.assertEqual(failed_data["paper"]["summary_blocks"], english_blocks)
             self.assertEqual(
                 failed_data["paper"]["summary_translation_error_code"],
                 "translation_structure_error",
@@ -641,6 +683,71 @@ class ApiTestCase(unittest.TestCase):
             )
             rerun_mock.assert_not_called()
             translation_mock.assert_called_once()
+        finally:
+            self.request("DELETE", f"/api/papers/{paper_id}")
+            self.server.db.update_settings({"provider": "local"})
+
+    def test_z_failed_translation_preserves_existing_bilingual_report(self) -> None:
+        paper_id = str(uuid.uuid4())
+        blocks = [{
+            "id": "paragraph-001",
+            "type": "paragraph",
+            "text_en": "The method retains the evidence.",
+            "text_zh": "该方法保留证据。",
+            "page_refs": [1],
+        }]
+        self.server.db.insert_paper(
+            {
+                "id": paper_id,
+                "title": "Existing Bilingual Report",
+                "original_filename": "bilingual.pdf",
+                "stored_filename": "missing-bilingual.pdf",
+                "summary_blocks": blocks,
+                "summary_status": "ready",
+                "summary_translation_status": "ready",
+                "created_at": "2026-08-10T00:00:00+00:00",
+                "updated_at": "2026-08-10T00:00:00+00:00",
+            },
+            [],
+        )
+        self.server.db.update_settings({"provider": "openai_compatible"})
+        valid = {"id": "paragraph-001", "text_zh": "新译文"}
+        cases = (
+            ({"translations": [valid, None]}, "translation_structure_error"),
+            ({"translations": [{"id": "paragraph-001", "text_zh": None}]}, "translation_empty_response"),
+            (SummaryError("LLM request failed (400): response_format unsupported; private-key-marker"), "model_json_mode_error"),
+            (SummaryError("LLM request failed (403): forbidden; private-key-marker"), "model_access_denied"),
+            (SummaryError("LLM request failed (404): missing model; private-key-marker"), "model_not_found"),
+            (SummaryError("LLM request failed (422): invalid parameter; private-key-marker"), "model_request_rejected"),
+        )
+        try:
+            for response, expected_code in cases:
+                with self.subTest(error_code=expected_code):
+                    if isinstance(response, SummaryError):
+                        mock_options = {"side_effect": response}
+                    else:
+                        mock_options = {"return_value": {
+                            "content": json.dumps(response, ensure_ascii=False),
+                            "finish_reason": "stop",
+                            "usage": {},
+                        }}
+                    with patch("backend.app.generate_english_report") as generate, patch(
+                        "backend.deep_summary.request_chat_completion", **mock_options
+                    ):
+                        status, data, _ = self.request(
+                            "POST", f"/api/papers/{paper_id}/translate-summary"
+                        )
+                    self.assertEqual(status, 502)
+                    self.assertEqual(data["error_code"], expected_code)
+                    self.assertEqual(data["paper"]["summary_status"], "translation_error")
+                    self.assertEqual(data["paper"]["summary_translation_status"], "error")
+                    self.assertEqual(data["paper"]["summary_translation_error_code"], expected_code)
+                    self.assertEqual(data["paper"]["summary_blocks"], blocks)
+                    self.assertNotIn("private-key-marker", json.dumps(data))
+                    persisted = self.server.db.get_paper(paper_id)
+                    self.assertEqual(persisted["summary_blocks"], blocks)
+                    self.assertEqual(persisted["summary_translation_status"], "error")
+                    generate.assert_not_called()
         finally:
             self.request("DELETE", f"/api/papers/{paper_id}")
             self.server.db.update_settings({"provider": "local"})

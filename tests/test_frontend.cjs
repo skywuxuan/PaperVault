@@ -317,6 +317,193 @@ function prepareReaderOperations(run) {
     loadLibrary = loadTags = async () => {};`);
 }
 
+test('translation failures preserve both languages and can be retried without regenerating English', async () => {
+  const { context, run } = app();
+  prepareReaderOperations(run);
+  const calls = [];
+  context.api = async (url) => {
+    calls.push(url);
+    const paper = JSON.parse(run('JSON.stringify(state.currentPaper)'));
+    if (calls.length === 1) {
+      const error = new Error('模型未返回有效的中文翻译');
+      error.data = { paper: { ...paper, summary_status: 'translation_error', summary_translation_status: 'error',
+        summary_translation_error: error.message } };
+      throw error;
+    }
+    return { paper: { ...paper, summary_status: 'ready', summary_translation_status: 'ready',
+      summary_blocks: [{ id: 'p1', text_en: 'Keep English', text_zh: '新的中文' }] } };
+  };
+  run(`state.currentPaper = { id: 'a', summary_status: 'translation_error', summary_translation_status: 'error',
+    summary_blocks: [{ id: 'p1', text_en: 'Keep English', text_zh: '已有中文' }] }; state.papers = [state.currentPaper];`);
+  await run('retrySummaryTranslation()');
+  assert.equal(run('state.currentPaper.summary_blocks[0].text_en'), 'Keep English');
+  assert.equal(run('state.currentPaper.summary_blocks[0].text_zh'), '已有中文');
+  assert.equal(run('nativeTranslationState(state.currentPaper)'), 'error');
+  assert.equal(run('state.summaryTranslationIds.size'), 0);
+  await run('retrySummaryTranslation()');
+  assert.equal(run('state.currentPaper.summary_blocks[0].text_zh'), '新的中文');
+  assert.equal(run('nativeTranslationState(state.currentPaper)'), 'ready');
+  assert.deepEqual(calls, ['/api/papers/a/translate-summary', '/api/papers/a/translate-summary']);
+});
+
+test('a disconnected translation recovers server state without affecting a newly opened paper', async () => {
+  const { context, run } = app();
+  prepareReaderOperations(run);
+  const request = deferred();
+  const calls = [];
+  context.api = (url, options) => {
+    calls.push([url, options?.method || 'GET']);
+    return options?.method === 'POST' ? request.promise : Promise.resolve({ paper: { id: 'a', summary_status: 'translating',
+      summary_translation_status: 'translating', summary_blocks: [{ id: 'p1', text_en: 'Keep A' }] } });
+  };
+  run(`state.currentPaper = { id: 'a', summary_status: 'english_ready', summary_blocks: [{ id: 'p1', text_en: 'Keep A' }] };
+    state.papers = [state.currentPaper]; globalThis.originalPaper = state.currentPaper;`);
+  const pending = run('retrySummaryTranslation()');
+  await run('retrySummaryTranslation({ paper: originalPaper })');
+  assert.equal(calls.length, 1, 'stale paper objects must not start duplicate translations');
+  run("state.currentPaper = { id: 'b', title: 'Keep B' };");
+  request.reject(new Error('Failed to fetch'));
+  await pending;
+  assert.deepEqual(calls, [['/api/papers/a/translate-summary', 'POST'], ['/api/papers/a', 'GET']]);
+  assert.equal(run('state.currentPaper.title'), 'Keep B');
+  assert.equal(run('state.papers[0].summary_status'), 'translating');
+  assert.equal(run('state.summaryTranslationIds.size'), 0);
+});
+
+test('an unreachable service keeps existing text and confirms server state before retrying', async () => {
+  const { context, run } = app();
+  prepareReaderOperations(run);
+  context.api = async () => { throw new Error('Failed to fetch'); };
+  run(`state.currentPaper = { id: 'a', summary_status: 'translation_error', summary_translation_status: 'error',
+    summary_blocks: [{ id: 'p1', text_en: 'Keep English', text_zh: '保留中文' }] }; state.papers = [state.currentPaper];`);
+  await run('retrySummaryTranslation()');
+  assert.equal(run('nativeTranslationState(state.currentPaper)'), 'error');
+  assert.equal(run('state.currentPaper.summary_translation_error_code'), 'translation_request_interrupted');
+  assert.equal(run('state.currentPaper.summary_blocks[0].text_zh'), '保留中文');
+  assert.equal(run('state.currentPaper.summary_blocks[0].text_en'), 'Keep English');
+  assert.equal(run('state.summaryTranslationIds.size'), 0);
+  const methods = [];
+  context.api = async (_, options) => {
+    methods.push(options?.method || 'GET');
+    return { paper: { id: 'a', summary_status: 'translating', summary_translation_status: 'translating',
+      summary_blocks: [{ id: 'p1', text_en: 'Keep English', text_zh: '保留中文' }] } };
+  };
+  await run('retrySummaryTranslation()');
+  assert.deepEqual(methods, ['GET'], 'an uncertain result must not start another paid request');
+  assert.equal(run('nativeTranslationState(state.currentPaper)'), 'translating');
+});
+
+test('an incomplete success response recovers the paper instead of claiming translation success', async () => {
+  for (const status of ['ready', 'translating', 'translation_error']) {
+    const { context, run } = app();
+    prepareReaderOperations(run);
+    const methods = [];
+    const messages = [];
+    context.toast = message => messages.push(message);
+    context.api = async (_, options) => {
+      methods.push(options?.method || 'GET');
+      return options?.method === 'POST' ? {} : { paper: { id: 'a', summary_status: status,
+        summary_translation_status: status === 'translation_error' ? 'error' : status,
+        summary_blocks: [{ id: 'p1', text_en: 'English', text_zh: status === 'ready' ? '中文' : '' }] } };
+    };
+    run("state.currentPaper = { id: 'a', summary_blocks: [{ id: 'p1', text_en: 'English' }] };");
+    await run('retrySummaryTranslation()');
+    assert.deepEqual(methods, ['POST', 'GET']);
+    assert.equal(run('state.currentPaper.summary_status'), status);
+    assert.ok(!messages.includes('中文翻译已完成'));
+  }
+});
+
+test('retrying a failed English summary in the library uses translation recovery', async () => {
+  const { context, run } = app();
+  prepareReaderOperations(run);
+  const calls = [];
+  context.api = async (url, options) => {
+    calls.push([url, options?.method || 'GET']);
+    if (url.endsWith('/translate-summary')) throw new Error('Failed to fetch');
+    return { paper: { id: 'a', summary_status: url.endsWith('/generate-summary') ? 'english_ready' : 'translation_error',
+      summary_translation_status: 'error', summary_blocks: [{ id: 'p1', text_en: 'New English' }] } };
+  };
+  run(`state.settings.provider = 'openai_compatible'; state.currentPaper = { id: 'a', summary_status: 'error' };
+    state.papers = [state.currentPaper];`);
+  await run('retryFailedPaperSummary(state.currentPaper)');
+  assert.deepEqual(calls, [['/api/papers/a/generate-summary', 'POST'], ['/api/papers/a/translate-summary', 'POST'], ['/api/papers/a', 'GET']]);
+  assert.equal(run('state.currentPaper.summary_blocks[0].text_en'), 'New English');
+  assert.equal(run('state.currentPaper.summary_status'), 'translation_error');
+});
+
+test('a library refresh failure cannot mark a completed translation as failed', async () => {
+  const { context, run } = app();
+  prepareReaderOperations(run);
+  context.api = async () => ({ paper: { id: 'a', summary_status: 'ready', summary_translation_status: 'ready',
+    summary_blocks: [{ id: 'p1', text_en: 'English', text_zh: '中文' }] } });
+  run(`state.currentPaper = { id: 'a', summary_blocks: [{ id: 'p1', text_en: 'English' }] };
+    loadLibrary = async () => { throw new Error('library unavailable'); };`);
+  await run('retrySummaryTranslation()');
+  assert.equal(run('nativeTranslationState(state.currentPaper)'), 'ready');
+  assert.equal(run('state.currentPaper.summary_blocks[0].text_zh'), '中文');
+});
+
+function prepareStructuredReport(context, run) {
+  const element = (tagName) => ({
+    tagName, children: [], dataset: {}, attributes: {}, listeners: {}, className: '', textContent: '',
+    get childElementCount() { return this.children.length; },
+    classList: { add() {} },
+    append(...children) { this.children.push(...children); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+  });
+  context.document.createElement = element;
+  context.report = element('div');
+  run('appendSummaryText = (node, text) => { node.textContent = text; };');
+  return context.report;
+}
+
+test('an untranslated report shows one accurate notice instead of a page of generation placeholders', () => {
+  for (const [status, translationStatus, title] of [
+    ['english_ready', 'pending', '中文翻译尚未生成'],
+    ['translation_error', 'error', '中文翻译未完成'],
+    ['translating', 'translating', '正在翻译中文'],
+  ]) {
+    const { context, run } = app();
+    const report = prepareStructuredReport(context, run);
+    context.samplePaper = { id: 'a', summary_status: status, summary_translation_status: translationStatus,
+      summary_translation_error: status === 'translation_error' ? '模型没有返回中文内容' : '',
+      summary_blocks: [{ id: 'p1', type: 'paragraph', text_en: 'First paragraph' }, { id: 'p2', type: 'paragraph', text_en: 'Second paragraph' }] };
+    run('state.currentPaper = samplePaper; renderStructuredReport(report, samplePaper.summary_blocks, "zh");');
+    assert.equal(report.children.length, 2, 'only the document heading and one status notice should render');
+    const notice = report.children[1];
+    assert.equal(notice.children[0].textContent, title);
+    assert.equal(notice.attributes.role, status === 'translation_error' ? 'alert' : 'status');
+    if (status === 'translation_error') {
+      assert.equal(notice.children[1].textContent, '模型没有返回中文内容');
+      assert.equal(notice.children[2].children[0].textContent, '重试中文翻译');
+      let retried;
+      context.retrySummaryTranslation = (options) => { retried = options.paper; };
+      notice.children[2].children[0].listeners.click();
+      assert.equal(retried.id, 'a');
+    }
+    if (status === 'translating') assert.equal(notice.children[2].children[0].textContent, '刷新状态');
+  }
+});
+
+test('partial Chinese reports retain translated paragraphs while ready reports have no status notice', () => {
+  const { context, run } = app();
+  const report = prepareStructuredReport(context, run);
+  run(`state.currentPaper = { id: 'a', summary_status: 'translation_error', summary_translation_status: 'error',
+    summary_blocks: [{ id: 'p1', type: 'paragraph', text_en: 'A', text_zh: '已有译文' }, { id: 'p2', type: 'paragraph', text_en: 'B' }] };
+    renderStructuredReport(report, state.currentPaper.summary_blocks, 'zh');`);
+  assert.equal(report.children[2].children[0].textContent, '已有译文');
+  assert.equal(report.children[3].children[0].textContent, '此段暂无中文译文');
+  report.children = [];
+  run(`state.currentPaper.summary_status = 'ready'; state.currentPaper.summary_translation_status = 'ready';
+    state.currentPaper.summary_blocks[1].text_zh = '新译文';
+    renderStructuredReport(report, state.currentPaper.summary_blocks, 'zh');`);
+  assert.equal(report.children.length, 3);
+  assert.equal(report.children[1].children[0].textContent, '已有译文');
+  assert.equal(report.children[2].children[0].textContent, '新译文');
+});
+
 test('Markdown export downloads the displayed Doubao variant even without a native summary', () => {
   const { context, run } = app();
   const downloads = [];
