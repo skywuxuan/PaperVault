@@ -10,6 +10,7 @@ from backend.app import PaperVaultServer
 from backend.config import load_local_environment
 
 from .platforms import DesktopPlatform, get_desktop_platform, resource_root
+from .windows_runtime import WindowsRuntimeError, check_windows_runtime_files
 
 
 WINDOW_TITLE = "PaperVault"
@@ -150,6 +151,8 @@ def run_desktop(argv: Sequence[str] | None = None) -> int:
     if not (frontend_dir / "index.html").is_file():
         raise RuntimeError(f"PaperVault frontend resources are missing: {frontend_dir}")
 
+    check_windows_runtime_files(root)
+
     try:
         import webview
     except ImportError as error:
@@ -190,7 +193,15 @@ def run_desktop(argv: Sequence[str] | None = None) -> int:
 
 
 def main() -> None:
-    raise SystemExit(run_desktop())
+    try:
+        result = run_desktop()
+    except WindowsRuntimeError as error:
+        # The packaged windowed launcher has no terminal. Use the OS dialog
+        # without importing CLR, which is precisely the dependency being blocked.
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, str(error), "PaperVault 无法启动", 0x10)
+        result = 1
+    raise SystemExit(result)
 
 
 if __name__ == "__main__":

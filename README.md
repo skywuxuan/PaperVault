@@ -82,6 +82,8 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 卸载时先退出程序，再删除解压的程序文件夹和自行创建的快捷方式。论文库另存于 `%LOCALAPPDATA%\PaperVault`；保留这个目录即可保留论文、笔记与设置。桌面版依赖 Microsoft Edge WebView2 Runtime，系统缺少时需先安装该组件。
 
+如果启动时报 `Python.Runtime.Loader.Initialize`，请先查看[Windows DLL 加载排查说明](docs/DESKTOP.md#windows-启动时报-pythonruntimedll-错误)：确认来源后解除下载 ZIP 的锁定，再完整解压到新目录。
+
 ### macOS 桌面版
 
 适用于 macOS 14 或更高版本、Apple Silicon（M 系列）Mac，使用系统 WKWebView，无需另行安装 Python 或 WebView2。Intel Mac 暂未提供安装包。

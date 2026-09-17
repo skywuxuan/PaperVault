@@ -27,6 +27,21 @@
 
 首次使用可以直接导入、整理和阅读论文。本地结构索引无需 API Key；详细双语摘要需要在“模型设置”中配置兼容的模型服务。
 
+### Windows 启动时报 Python.Runtime.dll 错误
+
+如果报错包含 `Failed to resolve Python.Runtime.Loader.Initialize`，说明 Windows 的 .NET 运行时未能加载 Python.NET 程序集。这与缺少 Python 安装不同；Windows 下载标记阻止 DLL 加载时，会出现这条错误。
+
+对于从本仓库 Release 下载并核对过校验值的 ZIP，请依次操作：
+
+1. 退出错误窗口，找到原始 ZIP 文件，右键选择“属性”。
+2. 如果底部有“解除锁定”（有些系统显示为“取消阻止”），勾选并点击“应用”。
+3. 将 ZIP **全部解压到一个新的文件夹**，不要只在原来的文件上覆盖。仅解除 ZIP 的锁定，不会清除之前已经解压的 DLL 上的下载标记。
+4. 在新文件夹中打开 `PaperVault\PaperVault.exe`，保留同级的 `_internal` 文件夹。
+
+这是针对该下载包的处理，不需要关闭 Defender、SmartScreen 或其他系统保护，也不需要另外下载 `Python.Runtime.dll`。微软说明见 [下载程序集的加载限制](https://learn.microsoft.com/en-us/dotnet/framework/configure-apps/file-schema/runtime/loadfromremotesources-element)。
+
+若 ZIP 没有“解除锁定”选项，或上述步骤仍未解决，请提供 Windows 版本、完整报错和文件校验结果，再检查 .NET Framework 与程序集完整性。相同的上层错误也可能由不同的 .NET 环境问题引起，不能仅凭错误文本认定已找到对方电脑的具体原因。
+
 ### 再次打开与快捷方式
 
 Windows 包是**解压即用的便携版，不是安装器**，不会自动创建桌面或开始菜单入口，也不会出现在“设置 → 应用 → 已安装的应用”中。再次打开时，运行解压目录中的 `PaperVault.exe`。

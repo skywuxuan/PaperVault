@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from pathlib import Path
 
 from backend import __version__
-from desktop.app import BackendRuntime, DesktopBridge, DesktopCloseGuard, build_parser
+from desktop.app import BackendRuntime, DesktopBridge, DesktopCloseGuard, build_parser, main, run_desktop
 from desktop.platforms import (
     configured_data_dir,
     default_data_dir,
@@ -147,6 +147,28 @@ class DesktopPlatformTestCase(unittest.TestCase):
 
 
 class DesktopRuntimeTestCase(unittest.TestCase):
+    def test_blocked_download_is_reported_before_starting_backend(self) -> None:
+        from desktop.windows_runtime import WindowsRuntimeError
+
+        with patch("desktop.app.check_windows_runtime_files", side_effect=WindowsRuntimeError([Path("Python.Runtime.dll")])), patch(
+            "desktop.app.BackendRuntime"
+        ) as runtime, patch("desktop.app.load_local_environment"):
+            with self.assertRaises(WindowsRuntimeError):
+                run_desktop([])
+        runtime.assert_not_called()
+
+    def test_blocked_download_displays_native_explanation_and_exits(self) -> None:
+        from desktop.windows_runtime import WindowsRuntimeError
+        from unittest.mock import MagicMock
+
+        error = WindowsRuntimeError([Path("Python.Runtime.dll")])
+        native_api = MagicMock()
+        with patch("desktop.app.run_desktop", side_effect=error), patch("ctypes.windll", native_api, create=True):
+            with self.assertRaises(SystemExit) as context:
+                main()
+        self.assertEqual(context.exception.code, 1)
+        native_api.user32.MessageBoxW.assert_called_once_with(None, str(error), "PaperVault 无法启动", 0x10)
+
     def test_backend_runtime_serves_health_and_stops(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime = BackendRuntime(PROJECT_DIR / "frontend", Path(temp_dir))
