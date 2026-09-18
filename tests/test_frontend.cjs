@@ -554,6 +554,12 @@ test('generating a summary after navigation translates the original paper withou
   assert.equal(run('state.papers[0].summary_status'), 'ready');
 });
 
+test('failed Chinese translation is not rendered as still generating', () => {
+  const { run } = app();
+  assert.equal(run("missingStructuredBlockLabel('zh', false)"), '中文翻译生成中…');
+  assert.equal(run("missingStructuredBlockLabel('zh', true)"), '暂无中文译文');
+});
+
 test('a failed generation response cannot replace the newly selected paper', async () => {
   const { context, run } = app();
   prepareReaderOperations(run);

@@ -1933,10 +1933,13 @@ function renderActiveSummarySource() {
     const paper = state.currentPaper;
     renderSummaries(
       paper?.summary_pairs || [],
-      paper?.summary_error || paper?.summary_translation_error,
+      paper?.summary_translation_status === "error"
+        ? paper?.summary_translation_error
+        : paper?.summary_error,
       paper?.visual_assets || [],
       paper?.id || "",
       paper?.summary_blocks || [],
+      paper?.summary_translation_status || "none",
     );
     if (paper) {
       const status = $("#summaryStatus");
@@ -2648,7 +2651,14 @@ function renderNotesPanel() {
   }
 }
 
-function renderSummaries(pairs, error = "", visualAssets = [], paperId = "", blocks = []) {
+function renderSummaries(
+  pairs,
+  error = "",
+  visualAssets = [],
+  paperId = "",
+  blocks = [],
+  translationStatus = "none",
+) {
   const english = $("#englishSummary");
   const chinese = $("#chineseSummary");
   english.replaceChildren();
@@ -2656,7 +2666,12 @@ function renderSummaries(pairs, error = "", visualAssets = [], paperId = "", blo
   state.activeVisualAssetKey = null;
   if (blocks.length) {
     renderStructuredReport(english, blocks, "en");
-    renderStructuredReport(chinese, blocks, "zh");
+    renderStructuredReport(
+      chinese,
+      blocks,
+      "zh",
+      translationStatus === "error" ? error : "",
+    );
     return;
   }
   if (!pairs.length) {
@@ -2727,7 +2742,6 @@ function renderStructuredReport(container, blocks, language) {
   const reportTitle = state.currentPaper?.summary_paper_title || state.currentPaper?.title;
   if (reportTitle) heading.append(make("p", "markdown-document-subtitle", reportTitle));
   container.append(heading);
-
   if (language === "zh") {
     renderTranslationNotice(container, state.currentPaper);
     if (!blocks.some((block) => String(block.text_zh || "").trim())) return;
@@ -2787,6 +2801,11 @@ function structuredBlockElement(block, language, tagName) {
     }
   });
   return node;
+}
+
+function missingStructuredBlockLabel(language, translationFailed) {
+  if (language !== "zh") return "内容暂不可用";
+  return translationFailed ? "暂无中文译文" : "中文翻译生成中…";
 }
 
 function appendPageReferenceButtons(container, pageRefs) {

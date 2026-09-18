@@ -43,6 +43,11 @@ class FriendlyModelErrorTestCase(unittest.TestCase):
             friendly_model_error("LLM request failed (503): unavailable")[1],
             "model_service_error",
         )
+        request_message, request_code = friendly_model_error(
+            "LLM request failed (400): unsupported response format"
+        )
+        self.assertEqual(request_code, "model_request_rejected")
+        self.assertIn("接口兼容性", request_message)
         self.assertEqual(
             friendly_model_error("LLM returned report blocks without valid page references")[1],
             "summary_evidence_validation_error",
