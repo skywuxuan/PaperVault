@@ -95,6 +95,9 @@ class DeepSummaryPromptIntentTestCase(unittest.TestCase):
         self.assertIn("sentences within a block", TRANSLATION_PROMPT)
         self.assertIn("Do not copy English syntax", TRANSLATION_PROMPT)
         self.assertIn("Preserve the supplied block IDs and order", TRANSLATION_PROMPT)
+        self.assertIn("strict JSON", TRANSLATION_PROMPT)
+        self.assertIn('"translations"', TRANSLATION_PROMPT)
+        self.assertIn('"text_zh"', TRANSLATION_PROMPT)
 
 
 class DeepSummaryStructureTestCase(unittest.TestCase):

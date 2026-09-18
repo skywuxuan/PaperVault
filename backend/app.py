@@ -2036,6 +2036,11 @@ def friendly_model_error(message: str) -> tuple[str, str]:
         )
     if "(401)" in lowered or "unauthorized" in lowered or "invalid api key" in lowered or "invalid token" in lowered:
         return "API Key 缺失、无效或已过期，请在模型设置中导入配置并保存后重试。", "invalid_api_key"
+    if any(f"({status})" in lowered for status in (400, 403, 404, 405, 415, 422)):
+        return (
+            "模型服务拒绝了当前请求，请检查服务地址、模型名称和接口兼容性后重试。",
+            "model_request_rejected",
+        )
     if "timed out" in lowered or "timeout" in lowered:
         return "模型响应超时，当前摘要没有被覆盖，请稍后重试。", "model_timeout"
     if "connection" in lowered or "urlopen" in lowered:
