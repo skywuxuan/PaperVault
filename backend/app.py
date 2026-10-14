@@ -1981,7 +1981,7 @@ def friendly_model_error(message: str) -> tuple[str, str]:
                 "model_json_mode_error",
             )
         return (
-            "模型服务不接受当前请求格式或参数，当前内容已保留。请检查模型与接口的兼容性，或更新软件后重试。",
+            "模型服务不接受当前请求格式或参数，当前内容已保留。请检查接口兼容性、模型与请求参数，或更新软件后重试。",
             "model_request_rejected",
         )
     if "(403)" in lowered:
