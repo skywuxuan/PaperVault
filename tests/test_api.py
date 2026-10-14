@@ -52,6 +52,10 @@ class FriendlyModelErrorTestCase(unittest.TestCase):
             friendly_model_error("LLM returned report blocks without valid page references")[1],
             "summary_evidence_validation_error",
         )
+        self.assertEqual(
+            friendly_model_error("Report contains three or more consecutive headings without content blocks: A / B / C")[1],
+            "summary_evidence_validation_error",
+        )
 
     def test_translation_shape_and_empty_errors_have_specific_codes(self) -> None:
         cases = (

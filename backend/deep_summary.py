@@ -85,7 +85,9 @@ omit it rather than infer it from filenames.
 
 Return strict JSON only using paper_title and blocks. Each block must contain id,
 type, text_en and page_refs. Heading blocks also contain level. Every page reference
-must be supported by the supplied [Page N] labels. Do not return Chinese or markdown."""
+must be supported by the supplied [Page N] labels. Use only heading, paragraph or
+bullet as the block type. page_refs must be an array of JSON integers, for example
+[1, 3], never strings such as "Page 1" or "[Page 1]". Do not return Chinese or markdown."""
 
 
 CHUNK_EVIDENCE_PROMPT = """You are preparing exhaustive evidence notes for one consecutive part of a
@@ -96,7 +98,9 @@ explanations. Do not add a generic conclusion or facts from outside this part.
 Return strict JSON only using paper_title and blocks. Each block must contain id,
 type, text_en and page_refs. Heading blocks also contain level. Use paragraphs for
 explanations and bullets only for genuinely parallel facts. Every page reference must
-match a supplied [Page N] label. Do not return Chinese or markdown."""
+match a supplied [Page N] label. Use only heading, paragraph or bullet as the block
+type. page_refs must be an array of JSON integers, for example [1, 3], never strings
+such as "Page 1" or "[Page 1]". Do not return Chinese or markdown."""
 
 
 TRANSLATION_PROMPT = """Rewrite the supplied structured English researcher brief as clear, natural,
@@ -1085,6 +1089,10 @@ def _valid_page_refs(value: Any, valid_pages: set[int]) -> list[int]:
         return []
     refs: list[int] = []
     for raw in value:
+        if isinstance(raw, str):
+            label = re.fullmatch(r"(?:Page\s+(\d+)|\[Page\s+(\d+)\])", raw.strip(), re.I)
+            if label:
+                raw = label.group(1) or label.group(2)
         try:
             page = int(raw)
         except (TypeError, ValueError):

@@ -101,6 +101,34 @@ class DeepSummaryPromptIntentTestCase(unittest.TestCase):
 
 
 class DeepSummaryStructureTestCase(unittest.TestCase):
+    def test_page_label_strings_preserve_report_paragraphs(self) -> None:
+        report = normalize_report(
+            {
+                "blocks": [
+                    {"type": "heading", "text_en": "Results", "page_refs": ["Page 1"]},
+                    {
+                        "type": "paragraph",
+                        "text_en": "The reported result is supported by these pages.",
+                        "page_refs": ["Page 1", "[Page 3]", " page 2 ", 1, "3", "Page 99"],
+                    },
+                ],
+            },
+            {1, 2, 3},
+            "Fallback",
+        )
+        self.assertEqual(len(report["blocks"]), 2)
+        self.assertEqual(report["blocks"][0]["page_refs"], [1])
+        self.assertEqual(report["blocks"][1]["page_refs"], [1, 3, 2])
+
+    def test_page_labels_do_not_infer_unsupported_or_ambiguous_pages(self) -> None:
+        for refs in (["Page 99"], ["Page 1-3"], ["See Page 1"], ["Page 1 and 2"], ["[Page 1"]):
+            with self.subTest(refs=refs), self.assertRaisesRegex(SummaryError, "no page-grounded"):
+                normalize_report(
+                    {"blocks": [{"type": "paragraph", "text_en": "Evidence.", "page_refs": refs}]},
+                    {1, 2, 3},
+                    "Fallback",
+                )
+
     def test_report_uses_natural_block_types_without_fixed_counts(self) -> None:
         report = normalize_report(
             {

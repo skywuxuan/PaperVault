@@ -1994,7 +1994,11 @@ def friendly_model_error(message: str) -> tuple[str, str]:
             "模型服务未找到请求的模型或接口，当前内容已保留。请核对 API 地址和模型名称。",
             "model_not_found",
         )
-    if "page-grounded" in lowered or "valid page references" in lowered:
+    if (
+        "page-grounded" in lowered
+        or "valid page references" in lowered
+        or "consecutive headings without content blocks" in lowered
+    ):
         return (
             "模型返回的摘要缺少有效正文或页码引用，自动重试后仍未通过校验。",
             "summary_evidence_validation_error",
