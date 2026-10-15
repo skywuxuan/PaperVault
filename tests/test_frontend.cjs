@@ -520,6 +520,19 @@ test('Markdown export downloads the displayed Doubao variant even without a nati
   assert.doesNotMatch(downloads[0][1], /New report/);
 });
 
+test('PDF reader download uses the original PDF filename', async () => {
+  const { context, run } = app();
+  const downloads = [];
+  context.fetch = async () => ({ ok: true, blob: async () => ({ type: 'application/pdf' }) });
+  context.downloadBlob = (...args) => downloads.push(args);
+  context.toast = () => {};
+  run("state.currentPaper = { id: 'paper-1', title: 'Paper title', original_filename: 'Original report.pdf' }; $('#pdfDownloadButton').disabled = false;");
+  await run('downloadPdf()');
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0][0], 'Original report.pdf');
+  assert.equal(downloads[0][1].type, 'application/pdf');
+});
+
 test('an empty displayed Doubao report cannot silently export the native summary', () => {
   const { context, run } = app();
   const messages = [];

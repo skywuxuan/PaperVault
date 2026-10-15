@@ -741,6 +741,29 @@ function downloadBlob(filename, blob) {
   window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 
+async function downloadPdf() {
+  const paper = state.currentPaper;
+  if (!paper) return;
+  const button = $("#pdfDownloadButton");
+  if (button?.disabled) return;
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(`/api/papers/${encodeURIComponent(paper.id)}/file`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "PDF 下载失败");
+    }
+    const filename = String(paper.original_filename || `${paper.title || "paper"}.pdf`)
+      .replace(/[\\/:*?"<>|]+/g, "-").trim() || "paper.pdf";
+    downloadBlob(filename.toLowerCase().endsWith(".pdf") ? filename : `${filename}.pdf`, await response.blob());
+    toast("PDF 下载已开始");
+  } catch (error) {
+    handleError(error);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function switchResourcePackageView(view) {
   if (!["export", "restore"].includes(view)) return;
   state.resourcePackageView = view;
@@ -4185,6 +4208,7 @@ function bindEvents() {
     });
   });
   $("#downloadMarkdownButton").addEventListener("click", downloadSummaryMarkdown);
+  $("#pdfDownloadButton").addEventListener("click", () => downloadPdf());
   $("#translateSummaryButton").addEventListener("click", () => retrySummaryTranslation());
   $("#pdfPreviousPage").addEventListener("click", () => goToPdfPage(state.pdfCurrentPage - 1));
   $("#pdfNextPage").addEventListener("click", () => goToPdfPage(state.pdfCurrentPage + 1));
