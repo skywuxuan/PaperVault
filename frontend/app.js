@@ -14,7 +14,7 @@ const state = {
   tagId: "",
   summaryFilter: "all",
   ratingFilter: "all",
-  librarySort: "recent",
+  librarySort: "recent_desc",
   libraryFacets: { total: 0, summary: {}, rating: {} },
   selectedPaperIds: new Set(),
   summaryRetryIds: new Set(),
@@ -297,6 +297,8 @@ function speakWordPopoverTerm() {
 }
 
 function renderLibrary() {
+  const sortHint = $("#publicationSortHint");
+  if (sortHint) sortHint.hidden = !["publication", "publication_asc", "publication_desc"].includes(state.librarySort);
   const list = $("#paperList");
   list.replaceChildren();
   const total = Number(state.libraryFacets.total) || 0;

@@ -92,18 +92,23 @@
             <input id="searchInput" type="search" aria-label="搜索论文" placeholder="搜索标题、作者、摘要或标签" autocomplete="off">
             <button id="clearSearchButton" class="search-clear" type="button" aria-label="清空搜索" title="清空搜索">&times;</button>
           </div>
-          <select id="librarySort" class="library-sort" aria-label="论文排序">
-            <option value="recent">最近入库</option>
-            <option value="rating">推荐度</option>
-            <option value="publication">发表时间</option>
-            <option value="title">标题</option>
-          </select>
+          <label class="library-sort-field"><span>排序</span><select id="librarySort" class="library-sort" aria-label="论文排序">
+            <option value="recent_desc">最近入库</option>
+            <option value="recent_asc">最早入库</option>
+            <option value="rating_desc">推荐度：高到低</option>
+            <option value="rating_asc">推荐度：低到高</option>
+            <option value="publication_desc">发表时间：新到旧</option>
+            <option value="publication_asc">发表时间：旧到新</option>
+            <option value="title_asc">标题：A 到 Z</option>
+            <option value="title_desc">标题：Z 到 A</option>
+          </select></label>
         </div>
       </div>
 
       <div id="resultBar" class="result-bar">
         <span id="resultText">全部论文</span>
         <span id="activeFilterLabel"></span>
+        <span id="publicationSortHint" hidden>按发表年份排序；同年按最近入库，未知年份排最后</span>
         <button id="resetFiltersButton" class="reset-filters-button" type="button" hidden>清除筛选</button>
       </div>
 

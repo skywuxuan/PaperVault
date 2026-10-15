@@ -105,7 +105,8 @@ button:disabled { opacity: .55; cursor: wait; }
 .library-total-inline { min-width: 28px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 500; text-align: center; letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .search-field { width: min(380px, 32vw); height: 44px; display: grid; grid-template-columns: 27px minmax(0,1fr) 28px; align-items: center; padding: 0 6px 0 13px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); color: var(--muted); }
 .library-tools { display: flex; align-items: center; gap: 8px; }
-.library-sort { max-width: 132px; height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: #625c70; font-size: 12px; cursor: pointer; }
+.library-sort-field { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.library-sort { min-width: 148px; height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: #625c70; font-size: 12px; cursor: pointer; }
 .search-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(104,83,216,.1); }
 .search-field input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 13px; }
 .search-clear { width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; }
@@ -775,7 +776,8 @@ input::placeholder, textarea::placeholder { color: #aaa2b4; }
   .library-content { width: calc(100% - 32px); padding: 26px 0 48px; }
   .library-toolbar { gap: 22px; margin-bottom: 18px; }
   .library-toolbar h1 { font-size: 28px; }
-  .library-sort { flex: 0 0 108px; min-width: 0; padding: 0 8px; }
+  .library-sort-field { flex: 0 0 auto; }
+  .library-sort { flex: 0 0 148px; min-width: 0; padding: 0 8px; }
   .search-field { width: 100%; grid-template-columns: 23px minmax(0,1fr) 22px; padding-left: 10px; }
   .search-field input { font-size: 12px; }
   .batch-toolbar { top: calc(var(--header-h) + 6px); }

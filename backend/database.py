@@ -582,9 +582,17 @@ class Database:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         order_by = {
             "recent": "p.created_at DESC",
+            "recent_desc": "p.created_at DESC",
+            "recent_asc": "p.created_at ASC",
             "rating": "p.rating DESC, COALESCE(p.publication_year, 0) DESC, p.created_at DESC",
-            "publication": "COALESCE(p.publication_year, 0) DESC, p.created_at DESC",
+            "rating_desc": "p.rating DESC, COALESCE(p.publication_year, 0) DESC, p.created_at DESC",
+            "rating_asc": "p.rating ASC, COALESCE(p.publication_year, 0) ASC, p.created_at ASC",
+            "publication": "p.publication_year IS NULL, p.publication_year DESC, p.created_at DESC, p.id ASC",
+            "publication_desc": "p.publication_year IS NULL, p.publication_year DESC, p.created_at DESC, p.id ASC",
+            "publication_asc": "p.publication_year IS NULL, p.publication_year ASC, p.created_at DESC, p.id ASC",
             "title": "p.title COLLATE NOCASE ASC",
+            "title_asc": "p.title COLLATE NOCASE ASC",
+            "title_desc": "p.title COLLATE NOCASE DESC",
         }.get(sort, "p.created_at DESC")
         with self.connect() as connection:
             rows = connection.execute(
