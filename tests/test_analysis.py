@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from backend.analysis import build_text_chunks
 from backend.app import PaperVaultServer
-from backend.database import Database, utc_now
+from backend.database import SCHEMA_VERSION, Database, utc_now
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -95,7 +95,8 @@ class DatabaseMigrationTestCase(unittest.TestCase):
             self.assertEqual(paper["summary_translation_status"], "none")
             self.assertEqual(paper["read_state"], "unread")
             with database.connect() as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+                self.assertEqual(paper["publication_year_source"], "legacy")
                 title_key = connection.execute(
                     "SELECT title_key FROM papers WHERE id = 'legacy-paper'"
                 ).fetchone()[0]

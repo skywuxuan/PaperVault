@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from email.parser import BytesParser
 from email.policy import default
 from http import HTTPStatus
@@ -50,7 +51,7 @@ from .pdf_parser import (
     extract_preview_words,
     extract_visual_pages,
     infer_title,
-    infer_publication_year,
+    infer_publication_year_details,
     render_preview_page,
 )
 from .resource_package import (
@@ -895,9 +896,14 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             return
         authors = fields.get("authors", "").strip() or parsed["author"]
         try:
-            year = parse_year(fields.get("publication_year", "")) or infer_publication_year(
-                parsed["text"], filename
+            supplied_year = parse_year(fields.get("publication_year", ""))
+            publication = (
+                {"year": supplied_year, "source": "manual", "evidence": "用户填写"}
+                if supplied_year is not None else infer_publication_year_details(
+                    parsed["text"], filename, first_page_text=parsed.get("first_page_text")
+                )
             )
+            year = publication["year"]
             tag_ids = parse_tag_ids(fields.get("tag_ids", ""))
         except ValueError as exc:
             destination.unlink(missing_ok=True)
@@ -927,6 +933,8 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             "title": title[:500],
             "authors": authors[:1000],
             "publication_year": year,
+            "publication_year_source": publication["source"],
+            "publication_year_evidence": publication["evidence"],
             "doi": fields.get("doi", "").strip()[:300],
             "original_filename": Path(filename).name[:500],
             "stored_filename": stored_filename,
@@ -1020,6 +1028,8 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                     fields[key] = str(payload[key]).strip()
             if "publication_year" in payload:
                 fields["publication_year"] = parse_year(payload["publication_year"])
+                fields["publication_year_source"] = "manual"
+                fields["publication_year_evidence"] = "用户填写" if fields["publication_year"] is not None else "用户留空，待确认"
             if "rating" in payload:
                 fields["rating"] = parse_rating(payload["rating"])
             if "read_state" in payload:
@@ -1949,13 +1959,12 @@ def normalize_preview_scale(value: Any) -> float:
 
 
 def parse_year(value: Any) -> int | None:
-    if value in (None, ""):
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    try:
-        year = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Publication year must be a number") from exc
-    if year < 1500 or year > 2200:
+    if isinstance(value, bool) or not isinstance(value, (str, int)) or not re.fullmatch(r"\d{4}", str(value).strip()):
+        raise ValueError("Publication year must be a four-digit integer")
+    year = int(str(value).strip())
+    if year < 1500 or year > datetime.now().year + 1:
         raise ValueError("Publication year is outside the valid range")
     return year
 

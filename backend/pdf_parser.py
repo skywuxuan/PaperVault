@@ -45,6 +45,7 @@ def extract_pdf(path: Path, original_filename: str | None = None) -> dict[str, A
         "page_count": len(reader.pages),
         "title": title,
         "author": author,
+        "first_page_text": pages[0] if pages else "",
     }
 
 
@@ -98,13 +99,115 @@ def _title_key(value: str) -> str:
 
 
 def infer_publication_year(text: str, filename: str) -> int | None:
-    latest_reasonable_year = datetime.now().year + 1
-    for source in (Path(filename).stem, text[:6000]):
-        for match in re.finditer(r"(?<!\d)(?:19|20)\d{2}(?!\d)", source):
-            year = int(match.group(0))
-            if 1900 <= year <= latest_reasonable_year:
-                return year
+    return infer_publication_year_details(text, filename)["year"]
+
+
+def _valid_publication_year(value: str) -> int | None:
+    year = int(value)
+    return year if 1500 <= year <= datetime.now().year + 1 else None
+
+
+def _dated_year(value: str) -> int | None:
+    months = r"(?P<month>[A-Za-z]+)\.?"
+    year = r"(?P<year>\d{4})"
+    day = r"(?P<day>\d{1,2})"
+    patterns = (
+        rf"{day}\s+{months}\s+{year}",
+        rf"{months}\s+{day},?\s+{year}",
+        rf"{months}\s+{year}",
+        rf"{year}-(?P<month>\d{{1,2}})-{day}",
+        rf"{year}/(?P<month>\d{{1,2}})/{day}",
+        rf"{year}年(?P<month>\d{{1,2}})月(?:{day}日)?",
+    )
+    month_names = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+    }
+    for pattern in patterns:
+        match = re.fullmatch(pattern, value.strip().rstrip("。."), re.I)
+        if not match:
+            continue
+        values = match.groupdict()
+        selected_year = _valid_publication_year(values["year"])
+        month = int(values["month"]) if values["month"].isdigit() else month_names.get(values["month"].lower())
+        if selected_year is None or month is None:
+            return None
+        try:
+            datetime(selected_year, month, int(values.get("day") or 1))
+        except ValueError:
+            return None
+        return selected_year
     return None
+
+
+def infer_publication_year_details(
+    text: str, filename: str, first_page_text: str | None = None,
+) -> dict[str, Any]:
+    """Prefer the paper's formal publication over a filename/date/arXiv stamp.
+
+    PDF creation/modification timestamps and arbitrary body years are deliberately
+    excluded. Conflicting evidence of equal priority needs human confirmation.
+    """
+    front = (first_page_text if first_page_text is not None else text[:8000])
+    front = re.split(r"(?im)^\s*(?:\d+\.?\s+)?(?:References|Bibliography|参考文献)\s*$", front)[0]
+    candidates: dict[str, list[tuple[int, str]]] = {
+        source: [] for source in ("publication", "filename", "header_date", "arxiv")
+    }
+
+    def add(source: str, year: int | None, evidence: str) -> None:
+        if year is not None:
+            candidates[source].append((year, evidence.strip()[:1000]))
+
+    # Only explicit publisher/venue statements qualify, never a year in an
+    # author email or a citation. ACM's copyright statement belongs to this PDF.
+    for match in re.finditer(r"(?:©|\(c\))\s*((?:19|20)\d{2})\s+Copyright[^\n]{0,200}(?:\n[^\n]{0,200})?", front, re.I):
+        if re.search(r"Publication rights licensed|owner/author", match.group(), re.I):
+            add("publication", _valid_publication_year(match.group(1)), match.group())
+    for line in front.splitlines():
+        venue = re.fullmatch(
+            r"\s*(?:Interspeech|EuroSys|ICASSP|ICML|ICLR|NeurIPS|ACL|EMNLP|NAACL)\s+((?:19|20)\d{2})\s*",
+            line, re.I,
+        )
+        if venue:
+            add("publication", _valid_publication_year(venue.group(1)), line)
+    for line in front.splitlines():
+        labelled = re.fullmatch(
+            r"\s*(?:published(?:\s+(?:online|on))?|publish\s+date|publication\s+date|release\s+date|发表日期|出版日期|发布日期)\s*[:：]?\s*(.+?)\s*",
+            line, re.I,
+        )
+        if labelled:
+            value = labelled.group(1).rstrip("。.")
+            selected_year = _valid_publication_year(value) if re.fullmatch(r"\d{4}", value) else _dated_year(value)
+            add("publication", selected_year, line)
+
+    # A filename must contain a stand-alone year; reject numbers inside email
+    # addresses, model identifiers, arXiv IDs and date-like decimal fragments.
+    stem = re.sub(r"\S+@\S+", "", Path(filename).stem)
+    for match in re.finditer(r"(?<![A-Za-z0-9.])((?:19|20)\d{2})(?![A-Za-z0-9]|\.\d)", stem):
+        add("filename", _valid_publication_year(match.group(1)), Path(filename).name)
+
+    # Body dates are ignored, except for a complete arXiv header line. Its
+    # visible version date is preserved as the fallback for a preprint PDF.
+    for line in front.splitlines():
+        stamp = re.fullmatch(r"\s*arXiv\s*:\s*\d{4}\.\d{4,5}(?:v\d+)?\s*\[[^\]\n]+\]\s*(.+?)\s*", line, re.I)
+        if stamp:
+            add("arxiv", _dated_year(stamp.group(1)), line)
+    for line in front.splitlines():
+        line = line.strip()
+        if re.match(r"^(?:(?:\d+\.?|[IVX]+)\s+)?(?:abstract|introduction|references|bibliography|摘要|引言|参考文献)\b", line, re.I):
+            break
+        labelled = re.fullmatch(r"date\s*[:：]?\s*(.+?)", line, re.I)
+        add("header_date", _dated_year(labelled.group(1) if labelled else line), line)
+
+    for source, evidence in candidates.items():
+        years = {year for year, _ in evidence}
+        if len(years) == 1:
+            return {"year": evidence[0][0], "source": source, "evidence": evidence[0][1]}
+        if len(years) > 1:
+            return {"year": None, "source": "unknown", "evidence": "Conflicting dates: " + " / ".join(item[1] for item in evidence)[:900]}
+    return {"year": None, "source": "unknown", "evidence": ""}
 
 
 def normalize_pdf_authors(value: Any) -> str:

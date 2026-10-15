@@ -261,7 +261,7 @@
         <div id="singlePaperMetadata" class="form-grid two-columns">
           <label class="field field-wide"><span>标题</span><input name="title" type="text" placeholder="自动从 PDF 识别"></label>
           <label class="field"><span>作者</span><input name="authors" type="text" placeholder="作者，多人可用逗号分隔"></label>
-          <label class="field"><span>发表年份</span><input name="publication_year" type="number" min="1500" max="2200" placeholder="2026"></label>
+          <label class="field"><span>发表年份</span><input name="publication_year" type="number" min="1500" step="1" placeholder="留空自动识别"></label>
           <label class="field field-wide"><span>DOI</span><input name="doi" type="text" placeholder="10.xxxx/xxxxx"></label>
         </div>
         <fieldset class="tag-picker-fieldset">
@@ -315,9 +315,10 @@
         <div class="form-grid two-columns">
           <label class="field field-wide"><span>标题</span><input name="title" type="text" required></label>
           <label class="field"><span>作者</span><input name="authors" type="text"></label>
-          <label class="field"><span>发表年份</span><input name="publication_year" type="number" min="1500" max="2200"></label>
+          <label class="field"><span>发表年份</span><input name="publication_year" type="number" min="1500" step="1" aria-describedby="publicationYearHint"></label>
           <label class="field field-wide"><span>DOI</span><input name="doi" type="text"></label>
         </div>
+        <p id="publicationYearHint" class="external-import-hint"></p>
         <fieldset class="tag-picker-fieldset">
           <legend>标签</legend>
           <div id="editTagPicker" class="tag-picker"></div>

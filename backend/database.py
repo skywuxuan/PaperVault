@@ -12,7 +12,7 @@ from typing import Any, Iterator
 from .config import apply_environment_settings
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 
 SCHEMA = """
@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS papers (
     title_key TEXT NOT NULL DEFAULT '',
     authors TEXT NOT NULL DEFAULT '',
     publication_year INTEGER,
+    publication_year_source TEXT NOT NULL DEFAULT 'legacy',
+    publication_year_evidence TEXT NOT NULL DEFAULT '',
     doi TEXT NOT NULL DEFAULT '',
     original_filename TEXT NOT NULL,
     stored_filename TEXT NOT NULL UNIQUE,
@@ -264,7 +266,7 @@ class Database:
     def initialize(self) -> None:
         with self.connect() as connection:
             existing_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if existing_version > SCHEMA_VERSION and existing_version != 5:
+            if existing_version > SCHEMA_VERSION:
                 raise RuntimeError(
                     f"Database schema version {existing_version} is newer than supported version {SCHEMA_VERSION}"
                 )
@@ -311,6 +313,12 @@ class Database:
                 connection.execute(
                     "ALTER TABLE papers ADD COLUMN title_key TEXT NOT NULL DEFAULT ''"
                 )
+            for column, declaration in {
+                "publication_year_source": "TEXT NOT NULL DEFAULT 'legacy'",
+                "publication_year_evidence": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE papers ADD COLUMN {column} {declaration}")
             for row in connection.execute("SELECT id, title, title_key FROM papers").fetchall():
                 title_key = normalize_title_key(row["title"])
                 if str(row["title_key"] or "") != title_key:
@@ -423,21 +431,20 @@ class Database:
                         """,
                         (status, utc_now(), row["id"]),
                     )
-            from .pdf_parser import infer_publication_year
+            from .pdf_parser import infer_publication_year_details
             for row in connection.execute(
                 """
                 SELECT id, original_filename, extracted_text FROM papers
-                WHERE publication_year IS NULL
+                WHERE publication_year IS NULL AND publication_year_source = 'legacy'
                 """
             ).fetchall():
-                year = infer_publication_year(
+                inferred = infer_publication_year_details(
                     str(row["extracted_text"]), str(row["original_filename"])
                 )
-                if year is not None:
-                    connection.execute(
-                        "UPDATE papers SET publication_year = ? WHERE id = ?",
-                        (year, row["id"]),
-                    )
+                connection.execute(
+                    "UPDATE papers SET publication_year = ?, publication_year_source = ?, publication_year_evidence = ? WHERE id = ?",
+                    (inferred["year"], inferred["source"], inferred["evidence"], row["id"]),
+                )
             vocabulary_columns = {
                 str(row["name"])
                 for row in connection.execute("PRAGMA table_info(vocabulary_entries)").fetchall()
@@ -687,8 +694,9 @@ class Database:
                     summary_translation_error, summary_translation_error_code,
                     summary_analysis_model, summary_translation_model,
                     summary_prompt_version, visual_assets, summary_status, summary_provider,
-                    summary_model, summary_error, summary_error_code, rating, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    summary_model, summary_error, summary_error_code, rating, created_at, updated_at,
+                    publication_year_source, publication_year_evidence
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     paper["id"], paper["title"], normalize_title_key(paper["title"]),
@@ -713,6 +721,8 @@ class Database:
                     paper.get("summary_error_code", ""),
                     paper.get("rating", 0),
                     paper["created_at"], paper["updated_at"],
+                    paper.get("publication_year_source", "legacy"),
+                    paper.get("publication_year_evidence", ""),
                 ),
             )
             self._replace_paper_tags(connection, paper["id"], tag_ids)
@@ -723,6 +733,7 @@ class Database:
     def update_paper(self, paper_id: str, fields: dict[str, Any], tag_ids: list[str] | None) -> dict[str, Any] | None:
         allowed = {
             "title", "authors", "publication_year", "doi", "rating", "read_state",
+            "publication_year_source", "publication_year_evidence",
             "summary_pairs", "summary_blocks", "summary_paper_title", "summary_translation_status",
             "summary_translation_error", "summary_translation_error_code",
             "summary_analysis_model", "summary_translation_model",

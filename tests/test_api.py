@@ -158,6 +158,54 @@ class ApiTestCase(unittest.TestCase):
             {"Content-Type": "application/json"},
         )
 
+    def test_publication_year_manual_edit_and_clear_survive_restart(self) -> None:
+        paper_id = str(uuid.uuid4())
+        self.server.db.insert_paper({
+            "id": paper_id, "title": "Publication Year Edit Test",
+            "original_filename": "year-test-2025.pdf", "stored_filename": f"{paper_id}.pdf",
+            "publication_year": 2025, "publication_year_source": "filename",
+            "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00",
+        }, [])
+        try:
+            status, result, _ = self.json_request("PUT", f"/api/papers/{paper_id}", {"publication_year": 2026})
+            self.assertEqual(status, 200)
+            self.assertEqual(result["paper"]["publication_year_source"], "manual")
+            for invalid in (2026.5, True, "2026-01-01", 2200):
+                with self.subTest(invalid=invalid):
+                    status, _, _ = self.json_request("PUT", f"/api/papers/{paper_id}", {"publication_year": invalid})
+                    self.assertEqual(status, 400)
+                    self.assertEqual(self.server.db.get_paper(paper_id)["publication_year"], 2026)
+            status, result, _ = self.json_request("PUT", f"/api/papers/{paper_id}", {"publication_year": ""})
+            self.assertEqual(status, 200)
+            self.server.db.initialize()
+            paper = self.server.db.get_paper(paper_id)
+            self.assertIsNone(paper["publication_year"])
+            self.assertEqual(paper["publication_year_source"], "manual")
+        finally:
+            self.server.db.delete_paper(paper_id)
+
+    def test_import_records_year_evidence_and_respects_a_supplied_year(self) -> None:
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        for supplied_year in ("", "2026"):
+            with self.subTest(supplied_year=supplied_year):
+                filename = f"import-{uuid.uuid4()}-2025.pdf"
+                body, content_type = make_multipart(
+                    {"title": str(uuid.uuid4()), "generate_summary": "0", "publication_year": supplied_year},
+                    filename, buffer.getvalue(),
+                )
+                status, result, _ = self.request("POST", "/api/papers", body, {"Content-Type": content_type})
+                self.assertEqual(status, 201)
+                paper = result["paper"]
+                try:
+                    self.assertEqual(paper["publication_year"], int(supplied_year or "2025"))
+                    self.assertEqual(paper["publication_year_source"], "manual" if supplied_year else "filename")
+                    self.assertTrue(paper["publication_year_evidence"])
+                finally:
+                    self.server.db.delete_paper(paper["id"])
+
     def test_full_paper_and_tag_lifecycle(self) -> None:
         status, tag_data, _ = self.json_request(
             "POST", "/api/tags", {"name": "Vision", "color": "#34618d"}

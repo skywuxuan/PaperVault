@@ -10,7 +10,7 @@ import json
 import threading
 from pathlib import Path
 
-from backend.database import Database, utc_now
+from backend.database import SCHEMA_VERSION, Database, utc_now
 from backend.app import PaperVaultServer
 from backend.resource_package import (
     ResourcePackageError,
@@ -52,7 +52,7 @@ class ResourcePackageTestCase(unittest.TestCase):
                 data_dir,
                 mode="standard",
                 app_version="test",
-                schema_version=4,
+                schema_version=SCHEMA_VERSION,
                 output_dir=output_dir,
             )
             inspected = inspect_resource_package(package_path)
@@ -72,7 +72,11 @@ class ResourcePackageTestCase(unittest.TestCase):
     def test_restore_replaces_data_and_preserves_current_machine_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            source_dir, _ = self.make_data_dir(root, "Source")
+            source_dir, source_paper_id = self.make_data_dir(root, "Source")
+            Database(source_dir / "paper-vault.db").update_paper(source_paper_id, {
+                "publication_year": 2025, "publication_year_source": "verified",
+                "publication_year_evidence": "https://example.test/official-citation",
+            }, None)
             target_dir, _ = self.make_data_dir(root, "Target")
             package_path, _ = export_resource_package(source_dir, output_dir=root / "exports")
             result = restore_resource_package(
@@ -80,11 +84,14 @@ class ResourcePackageTestCase(unittest.TestCase):
                 target_dir,
                 preserve_api_key="target-secret",
                 app_version="test",
-                schema_version=4,
+                schema_version=SCHEMA_VERSION,
                 backup_output_dir=root / "safety-backups",
             )
             restored = Database(target_dir / "paper-vault.db")
             self.assertEqual(restored.list_papers()[0]["title"], "Source")
+            self.assertEqual(restored.get_paper(source_paper_id)["publication_year"], 2025)
+            self.assertEqual(restored.get_paper(source_paper_id)["publication_year_source"], "verified")
+            self.assertEqual(restored.get_paper(source_paper_id)["publication_year_evidence"], "https://example.test/official-citation")
             self.assertEqual(restored.get_settings(include_secret=True)["api_key"], "target-secret")
             self.assertTrue(result["auto_backup"])
             self.assertTrue((target_dir.parent / result["previous_data_dir"]).is_dir())
@@ -119,10 +126,10 @@ class ResourcePackageTestCase(unittest.TestCase):
             with Database(source_dir / "paper-vault.db").connect() as connection:
                 connection.execute("PRAGMA user_version = 99")
             package_path, _ = export_resource_package(
-                source_dir, schema_version=4, output_dir=root / "exports"
+                source_dir, schema_version=SCHEMA_VERSION, output_dir=root / "exports"
             )
             with self.assertRaises(ResourcePackageError):
-                restore_resource_package(package_path, target_dir, schema_version=4)
+                restore_resource_package(package_path, target_dir, schema_version=SCHEMA_VERSION)
             current = Database(target_dir / "paper-vault.db")
             self.assertEqual(current.get_paper(target_paper_id)["title"], "Current library")
             self.assertEqual(current.get_settings(include_secret=True)["api_key"], "local-secret")

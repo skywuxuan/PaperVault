@@ -188,7 +188,7 @@ function paperAuthors(paper) {
 function paperAuthorDetails(paper) {
   return [
     paperAuthors(paper) || "作者信息未识别",
-    paper.publication_year,
+    paper.publication_year || "年份待确认",
   ].filter(Boolean).join(" · ");
 }
 
@@ -3505,6 +3505,16 @@ function showEditDialog() {
   form.elements.title.value = paper.title || "";
   form.elements.authors.value = paper.authors || "";
   form.elements.publication_year.value = paper.publication_year || "";
+  const sourceLabels = {
+    publication: "论文正式发表信息", filename: "文件名", header_date: "论文首页日期",
+    arxiv: "arXiv 页眉日期", manual: "手动确认", verified: "官方资料核实",
+    legacy: "旧记录，来源未确认", unknown: "尚无可靠日期",
+  };
+  const yearHint = $("#publicationYearHint");
+  if (yearHint) {
+    yearHint.textContent = `年份来源：${sourceLabels[paper.publication_year_source] || "旧记录，来源未确认"}。正式发表年份优先；无法确认时可留空。`;
+    yearHint.title = paper.publication_year_evidence || "";
+  }
   form.elements.doi.value = paper.doi || "";
   form.elements.summary_en.value = (paper.summary_pairs || []).map((pair) => pair.en || "").join("\n");
   form.elements.summary_zh.value = (paper.summary_pairs || []).map((pair) => pair.zh || "").join("\n");
@@ -4131,6 +4141,7 @@ function updatePanelLayout() {
 }
 
 function bindEvents() {
+  $$('input[name="publication_year"]').forEach((input) => { input.max = String(new Date().getFullYear() + 1); });
   $("#uploadButton").addEventListener("click", showUploadDialog);
   $("#emptyUploadButton").addEventListener("click", showUploadDialog);
   $("#settingsButton").addEventListener("click", showSettingsDialog);
