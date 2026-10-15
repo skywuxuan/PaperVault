@@ -349,6 +349,8 @@ h3.structured-heading { margin: 22px 0 9px; color: #4c415b; font-size: 13px; }
 .linked-label b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 750; }
 .summary-header-tools { justify-content: flex-end; gap: 7px !important; }
 .summary-download-button, .summary-translate-button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--accent); font-size: 17px; cursor: pointer; }
+.summary-edit-button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--accent); font-size: 16px; cursor: pointer; }
+.summary-edit-button:hover, .summary-download-button:hover, .summary-translate-button:hover { background: var(--accent-soft); }
 .summary-source-switch { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
 .summary-source-switch button { min-height: 26px; padding: 0 7px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 550; cursor: pointer; }
 .summary-source-switch button.active { background: white; color: var(--accent); box-shadow: 0 1px 4px rgba(18,35,30,.12); }
@@ -379,6 +381,8 @@ h3.structured-heading { margin: 22px 0 9px; color: #4c415b; font-size: 13px; }
 .doubao-progress-step.complete > span { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .doubao-progress-step.complete:not(:last-of-type)::after { background: #b7a5df; }
 .doubao-import-progress > p { margin: 2px 0 0 33px; color: var(--accent); font-size: 12px; font-weight: 750; }
+.doubao-edit-body { display: grid; gap: 16px; }
+.doubao-edit-textarea { min-height: 390px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.65; }
 @keyframes import-step-pulse { 50% { box-shadow: 0 0 0 7px rgba(104,83,216,.04); } }
 .external-mapped-block { border-radius: 3px; transition: background 160ms ease, box-shadow 160ms ease; cursor: pointer; }
 .external-mapped-block:hover { background: rgba(52,97,141,.06); }

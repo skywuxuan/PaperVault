@@ -33,7 +33,7 @@ from .analysis import (
 )
 from .config import DATA_DIR_ENV, load_local_environment
 from .database import SCHEMA_VERSION, Database, normalize_title_key, utc_now
-from .doubao import fetch_doubao_markdown, markdown_blocks, translate_markdown_to_english
+from .doubao import fetch_doubao_markdown, markdown_blocks, normalize_markdown, translate_markdown_to_english
 from .deep_summary import (
     DEEP_SUMMARY_PROMPT_VERSION,
     analysis_model,
@@ -82,6 +82,7 @@ ANNOTATION_ROUTE_RE = re.compile(r"^/api/annotations/([0-9a-f-]+)$")
 PAPER_VARIANTS_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/summary-variants$")
 PAPER_NOTES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/notes$")
 VARIANT_TRANSLATION_RE = re.compile(r"^/api/summary-variants/([0-9a-f-]+)/translate-english$")
+VARIANT_ROUTE_RE = re.compile(r"^/api/summary-variants/([0-9a-f-]+)$")
 NOTE_QUOTES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/notes/quotes$")
 NOTE_QUOTE_ROUTE_RE = re.compile(r"^/api/note-quotes/([0-9a-f-]+)$")
 RESOURCE_PACKAGE_INCOMING_RE = re.compile(r"^/api/resource-packages/incoming/([0-9a-f-]+)$")
@@ -516,6 +517,10 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         match = PAPER_NOTES_RE.match(path)
         if match:
             self.update_note(match.group(1))
+            return
+        match = VARIANT_ROUTE_RE.match(path)
+        if match:
+            self.update_summary_variant(match.group(1))
             return
         if path == "/api/settings":
             self.update_settings()
@@ -1203,6 +1208,50 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         updated = self.server.db.update_summary_variant(
             variant_id, {"english_markdown": english, "english_status": "ready", "model": model, "error": ""}
         )
+        self.send_json({"variant": updated})
+
+    def update_summary_variant(self, variant_id: str) -> None:
+        variant = self.server.db.get_summary_variant(variant_id)
+        if variant is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Summary variant not found")
+            return
+        if variant.get("provider") != "doubao":
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Only Doubao summaries can be edited")
+            return
+        try:
+            payload = self.read_json()
+            title = str(payload.get("title", variant.get("title", ""))).strip()[:200]
+            if not title:
+                raise ValueError("Summary title is required")
+            if "content_markdown" not in payload:
+                raise ValueError("Summary content is required")
+            content_markdown = normalize_markdown(str(payload.get("content_markdown", "")))
+            if not content_markdown:
+                raise ValueError("Summary content is required")
+            if len(content_markdown) > 500_000:
+                raise ValueError("Summary content is too long")
+        except (TypeError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
+        fields: dict[str, Any] = {
+            "title": title,
+            "content_markdown": content_markdown,
+            "content_blocks": markdown_blocks(content_markdown),
+        }
+        if content_markdown != str(variant.get("content_markdown", "")):
+            fields.update(
+                {
+                    "english_markdown": "",
+                    "english_status": "pending",
+                    "model": "",
+                    "error": "",
+                }
+            )
+        updated = self.server.db.update_summary_variant(variant_id, fields)
+        if updated is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Summary variant not found")
+            return
         self.send_json({"variant": updated})
 
     def create_note_quote(self, paper_id: str) -> None:

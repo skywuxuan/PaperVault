@@ -1890,6 +1890,12 @@ function renderSummarySourceControls() {
     $("#doubaoImportLabel").textContent = hasDoubao ? "豆包解析" : "导入豆包";
     doubaoButton.classList.toggle("active-source", showingDoubao);
   }
+  const editDoubaoButton = $("#editDoubaoButton");
+  if (editDoubaoButton) {
+    const editable = state.activeSummarySource === "doubao" && Boolean(currentDoubaoVariant());
+    editDoubaoButton.hidden = !editable;
+    editDoubaoButton.disabled = !editable;
+  }
   $$('[data-summary-source]').forEach((button) => {
     button.hidden = button.dataset.summarySource === "doubao" && !hasDoubao;
     button.classList.toggle("active", button.dataset.summarySource === state.activeSummarySource);
@@ -1924,6 +1930,57 @@ function handleDoubaoAction() {
   state.activeSummarySource = "doubao";
   renderSummarySourceControls();
   renderActiveSummarySource();
+}
+
+function showDoubaoEditDialog() {
+  const variant = currentDoubaoVariant();
+  if (!variant) return;
+  const form = $("#doubaoEditForm");
+  form.elements.title.value = variant.title || state.currentPaper?.title || "豆包论文解析";
+  form.elements.content_markdown.value = variant.content_markdown || "";
+  form.elements.generate_english.checked = true;
+  $("#doubaoEditSubmit").disabled = false;
+  $("#doubaoEditSubmit").textContent = "保存修改";
+  openDialog("doubaoEditDialog");
+}
+
+async function editDoubaoSummary(event) {
+  event.preventDefault();
+  const paper = state.currentPaper;
+  const variant = currentDoubaoVariant();
+  if (!paper || !variant) return;
+  const form = event.currentTarget;
+  const title = String(form.elements.title.value || "").trim();
+  const content = String(form.elements.content_markdown.value || "").trim();
+  if (!title || !content) {
+    toast("标题和解析内容不能为空", "error");
+    return;
+  }
+  const generateEnglish = form.elements.generate_english.checked;
+  const submit = $("#doubaoEditSubmit");
+  submit.disabled = true;
+  submit.textContent = "正在保存…";
+  try {
+    const result = await api(`/api/summary-variants/${variant.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, content_markdown: content }),
+    });
+    cacheSummaryVariant(paper, result.variant);
+    closeDialog("doubaoEditDialog");
+    renderSummarySourceControls();
+    renderActiveSummarySource();
+    toast("豆包解析已保存");
+    if (generateEnglish && result.variant.english_status === "pending") {
+      toast("正在重新生成英文版");
+      await retryExternalEnglish(result.variant.id, paper);
+    }
+  } catch (error) {
+    handleError(error);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "保存修改";
+  }
 }
 
 function renderActiveSummarySource() {
@@ -4082,6 +4139,7 @@ function bindEvents() {
   $("#editPaperButton").addEventListener("click", showEditDialog);
   $("#regenerateButton").addEventListener("click", handleNativeSummaryAction);
   $("#doubaoImportButton").addEventListener("click", handleDoubaoAction);
+  $("#editDoubaoButton").addEventListener("click", showDoubaoEditDialog);
   $("#notesButton").addEventListener("click", openNotesDrawer);
   $("#closeNotesButton").addEventListener("click", closeNotesDrawer);
   $("#quoteSummarySelectionButton").addEventListener("click", () => {
@@ -4092,6 +4150,7 @@ function bindEvents() {
     closeSummarySelectionToolbar(true);
   });
   $("#doubaoImportForm").addEventListener("submit", importDoubaoSummary);
+  $("#doubaoEditForm").addEventListener("submit", editDoubaoSummary);
   $("#noteTitleInput").addEventListener("input", queueNoteSave);
   $("#noteBodyInput").addEventListener("input", queueNoteSave);
   $("#addNoteQuoteButton").addEventListener("click", () => addSelectedSummaryQuote());

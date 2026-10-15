@@ -201,3 +201,62 @@ class DoubaoImportTestCase(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=3)
+
+    def test_editing_variant_rebuilds_blocks_and_invalidates_english(self) -> None:
+        project_dir = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as directory:
+            server = PaperVaultServer(("127.0.0.1", 0), project_dir / "frontend", Path(directory))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                paper_id = str(uuid.uuid4())
+                now = utc_now()
+                server.db.insert_paper(
+                    {
+                        "id": paper_id,
+                        "title": "Edit Test",
+                        "original_filename": "edit-test.pdf",
+                        "stored_filename": f"{paper_id}.pdf",
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                    [],
+                )
+                variant = server.db.create_summary_variant(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "paper_id": paper_id,
+                        "provider": "doubao",
+                        "title": "Old title",
+                        "content_markdown": "# Old title\n\n旧内容。",
+                        "content_blocks": markdown_blocks("# Old title\n\n旧内容。"),
+                        "english_markdown": "# Old title\n\nOld content.",
+                        "english_status": "ready",
+                        "model": "demo-model",
+                    }
+                )
+                body = json.dumps(
+                    {"title": "New title", "content_markdown": "# New title\n\n## 方法\n新内容。"}
+                ).encode("utf-8")
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+                connection.request(
+                    "PUT",
+                    f"/api/summary-variants/{variant['id']}",
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                connection.close()
+                self.assertEqual(response.status, 200)
+                edited = payload["variant"]
+                self.assertEqual(edited["title"], "New title")
+                self.assertIn("新内容", edited["content_markdown"])
+                self.assertEqual([block["type"] for block in edited["content_blocks"]], ["heading", "heading", "paragraph"])
+                self.assertEqual(edited["english_status"], "pending")
+                self.assertEqual(edited["english_markdown"], "")
+                self.assertEqual(edited["model"], "")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)

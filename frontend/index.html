@@ -220,6 +220,7 @@
           <div><span class="panel-index chinese-index">03</span><h2 id="chineseHeading">中文摘要</h2></div>
           <div class="summary-header-tools">
             <span id="termLinkLabel" class="linked-label" title="单击任一侧句子可同步显示对应句" aria-hidden="true"><i></i><b>句对联动</b></span>
+            <button id="editDoubaoButton" class="summary-edit-button" type="button" title="编辑豆包解析" aria-label="编辑豆包解析" hidden>✎</button>
             <button id="translateSummaryButton" class="summary-translate-button" type="button" title="生成中文翻译" aria-label="生成中文翻译" hidden>&#8635;</button>
             <button id="downloadMarkdownButton" class="summary-download-button" type="button" title="下载 Markdown 摘要" aria-label="下载 Markdown 摘要">↓</button>
             <button class="panel-collapse-button" type="button" data-collapse-panel="chinese" title="折叠中文摘要" aria-label="折叠中文摘要" aria-expanded="true">−</button>
@@ -574,6 +575,21 @@
         </div>
       </div>
       <div class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="doubaoImportDialog">取消</button><button id="doubaoImportSubmit" class="primary-button" type="submit">导入解析</button></div>
+    </form>
+  </dialog>
+  <dialog id="doubaoEditDialog" class="modal large-modal" aria-labelledby="doubaoEditDialogTitle">
+    <form id="doubaoEditForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">EDIT EXTERNAL REPORT</p><h2 id="doubaoEditDialogTitle">编辑豆包解析</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="doubaoEditDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+      </div>
+      <div class="modal-body doubao-edit-body">
+        <p class="external-import-intro">可以直接修改标题和 Markdown 内容。保存内容后，原英文版会清除，避免中英文内容不一致。</p>
+        <label class="field field-wide"><span>标题</span><input name="title" type="text" maxlength="200" required></label>
+        <label class="field field-wide"><span>中文解析 Markdown</span><textarea name="content_markdown" class="doubao-edit-textarea" rows="22" required></textarea></label>
+        <label class="import-preview-toggle"><input name="generate_english" type="checkbox" checked><span>保存后重新生成英文版</span></label>
+      </div>
+      <div class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="doubaoEditDialog">取消</button><button id="doubaoEditSubmit" class="primary-button" type="submit">保存修改</button></div>
     </form>
   </dialog>
   <aside id="notesDrawer" class="notes-drawer" aria-label="我的笔记" hidden>
