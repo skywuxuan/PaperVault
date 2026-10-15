@@ -15,7 +15,7 @@ function deferred() {
 function app() {
   const nodes = new Map();
   const document = {
-    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    body: { classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } } },
     querySelector: selector => {
       if (!nodes.has(selector)) {
         const classes = new Set();
@@ -76,6 +76,19 @@ test('a delayed library response cannot replace newer search results', async () 
   await older;
   assert.equal(run('state.papers[0].id'), 'new');
 });
+
+test('returning from a paper restores the previous library scroll position', async () => {
+  const { context, run } = app();
+  const scrollCalls = [];
+  context.window.scrollY = 720;
+  context.window.scrollTo = (...args) => scrollCalls.push(args);
+  context.window.requestAnimationFrame = callback => { callback(); return 1; };
+  run("navigateToPaper('paper-a'); location.hash = ''; state.currentPaper = { id: 'paper-a' }; handleRoute();");
+  await settle();
+  assert.equal(run('state.libraryScrollY'), 720);
+  assert.deepEqual(scrollCalls.at(-1), [0, 720]);
+});
+
 
 test('note autosave keeps the original paper and captured text after navigation', async () => {
   const { context, run } = app();

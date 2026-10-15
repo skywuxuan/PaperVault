@@ -15,6 +15,7 @@ const state = {
   summaryFilter: "all",
   ratingFilter: "all",
   librarySort: "recent_desc",
+  libraryScrollY: 0,
   libraryFacets: { total: 0, summary: {}, rating: {} },
   selectedPaperIds: new Set(),
   summaryRetryIds: new Set(),
@@ -1213,6 +1214,9 @@ function resetLibraryFilters() {
 }
 
 function navigateToPaper(paperId) {
+  if (!document.body.classList.contains("reader-page")) {
+    state.libraryScrollY = window.scrollY || document.documentElement?.scrollTop || 0;
+  }
   location.hash = `paper/${paperId}`;
 }
 
@@ -1250,6 +1254,9 @@ async function handleRoute() {
     $("#libraryView").hidden = false;
     $("#readerView").hidden = true;
     clearPdfPreview();
+    const restoreLibraryScroll = () => window.scrollTo(0, state.libraryScrollY || 0);
+    restoreLibraryScroll();
+    window.requestAnimationFrame?.(restoreLibraryScroll);
     return;
   }
   try {
