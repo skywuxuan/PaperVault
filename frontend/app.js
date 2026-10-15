@@ -4113,6 +4113,24 @@ function showSelectedFiles(fileList) {
   });
 }
 
+function appendDroppedFiles(fileList) {
+  const input = $("#pdfInput");
+  const current = [...(input.files || [])];
+  const incoming = [...(fileList || [])];
+  const files = [];
+  const seen = new Set();
+  for (const file of [...current, ...incoming]) {
+    const key = `${file.name}\u0000${file.size}\u0000${file.lastModified || 0}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    files.push(file);
+  }
+  const transfer = new DataTransfer();
+  files.forEach((file) => transfer.items.add(file));
+  input.files = transfer.files;
+  showSelectedFiles(transfer.files);
+}
+
 function setUploadFileStatus(index, status, text) {
   const row = $(`[data-file-index="${index}"]`, $("#uploadFileQueue"));
   if (!row) return;
@@ -4318,10 +4336,7 @@ function bindEvents() {
   dropZone.addEventListener("drop", (event) => {
     const files = [...event.dataTransfer.files].filter((file) => file.name.toLowerCase().endsWith(".pdf"));
     if (!files.length) return;
-    const transfer = new DataTransfer();
-    files.forEach((file) => transfer.items.add(file));
-    $("#pdfInput").files = transfer.files;
-    showSelectedFiles(transfer.files);
+    appendDroppedFiles(files);
   });
 
   const resourceDropZone = $("#resourceRestoreDropzone");

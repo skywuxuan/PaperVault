@@ -90,6 +90,26 @@ test('returning from a paper restores the previous library scroll position', asy
 });
 
 
+test('dropping PDFs multiple times appends files and removes only exact duplicates', () => {
+  const { context, run } = app();
+  class Transfer {
+    constructor() {
+      this.files = [];
+      this.items = { add: file => this.files.push(file) };
+    }
+  }
+  context.DataTransfer = Transfer;
+  context.first = { name: 'first.pdf', size: 10, lastModified: 1 };
+  context.second = { name: 'second.pdf', size: 20, lastModified: 2 };
+  context.sameSecond = { name: 'second.pdf', size: 20, lastModified: 2 };
+  run("showSelectedFiles = files => { $('#dropTitle').textContent = files.length > 1 ? `已选择 ${files.length} 个 PDF` : files[0]?.name || ''; };");
+  run("$('#pdfInput').files = [];");
+  run('appendDroppedFiles([first])');
+  run('appendDroppedFiles([second, sameSecond])');
+  assert.equal(JSON.stringify(run("[...$('#pdfInput').files].map(file => file.name)")), JSON.stringify(['first.pdf', 'second.pdf']));
+  assert.equal(run("$('#dropTitle').textContent"), '已选择 2 个 PDF');
+});
+
 test('note autosave keeps the original paper and captured text after navigation', async () => {
   const { context, run } = app();
   const calls = [];
