@@ -67,8 +67,16 @@ def infer_title(text: str, filename: str) -> str:
     for index, line in enumerate(candidates[:12]):
         if 12 <= len(line) <= 240 and not re.match(r"^(abstract|arxiv|doi|http)", line, re.I):
             complete = line
+            next_lines = candidates[index + 1 : index + 5]
+            if (
+                index + 1 < len(candidates)
+                and (line.endswith(":") or (line.isupper() and candidates[index + 1].isupper()))
+                and 12 <= len(candidates[index + 1]) <= 240
+                and not re.match(r"^(abstract|arxiv|doi|http|keywords?)\b", candidates[index + 1], re.I)
+            ):
+                complete = f"{line} {candidates[index + 1]}".strip()
             if filename_key.startswith(_title_key(line)):
-                for continuation in candidates[index + 1 : index + 5]:
+                for continuation in next_lines:
                     if not 2 <= len(continuation) <= 240 or re.match(
                         r"^(abstract|arxiv|doi|http|keywords?)\b", continuation, re.I
                     ):
@@ -86,6 +94,12 @@ def infer_title(text: str, filename: str) -> str:
 
 def _prefer_complete_title(metadata_title: str, inferred_title: str) -> str:
     if not metadata_title:
+        return inferred_title
+    if re.fullmatch(
+        r"(?:submitted\s+to|anonymous(?:\s+submission)?|paper\s+submitted\s+to|under\s+review|manuscript\s+submitted|draft)\b.*",
+        metadata_title.strip(),
+        re.I,
+    ):
         return inferred_title
     metadata_key = _title_key(metadata_title)
     inferred_key = _title_key(inferred_title)

@@ -197,6 +197,31 @@ Body text."""
             _prefer_complete_title("Curated Display Title", "Unrelated inferred title"),
             "Curated Display Title",
         )
+        self.assertEqual(
+            _prefer_complete_title("Submitted to INTERSPEECH", "Contextualized End-to-End Speech Recognition with Contextual Phrase Prediction Network"),
+            "Contextualized End-to-End Speech Recognition with Contextual Phrase Prediction Network",
+        )
+
+    def test_submission_placeholder_and_colon_title_are_repaired(self) -> None:
+        submitted = """Contextualized End-to-End Speech Recognition with Contextual Phrase
+Prediction Network
+Kaixun Huang, Ao Zhang
+Abstract
+Body text."""
+        self.assertEqual(
+            infer_title(submitted, "Contextualized End-to-End Speech Recognition with Contextual Phrase Prediction Network.pdf"),
+            "Contextualized End-to-End Speech Recognition with Contextual Phrase Prediction Network",
+        )
+        bytes_report = """arXiv:1811.09021v1 [eess.AS] 22 Nov 2018
+BYTES ARE ALL YOU NEED:
+END-TO-END MULTILINGUAL SPEECH RECOGNITION AND SYNTHESIS WITH BYTES
+Bo Li, Yu Zhang, Tara Sainath
+ABSTRACT
+Body text."""
+        self.assertEqual(
+            infer_title(bytes_report, "End-to-end multilingual speech recognition and synthesis with bytes.pdf"),
+            "BYTES ARE ALL YOU NEED: END-TO-END MULTILINGUAL SPEECH RECOGNITION AND SYNTHESIS WITH BYTES",
+        )
 
     def test_pdf_extraction_uses_original_filename_to_verify_title_continuation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
