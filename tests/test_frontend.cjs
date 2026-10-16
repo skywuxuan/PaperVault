@@ -110,6 +110,40 @@ test('dropping PDFs multiple times appends files and removes only exact duplicat
   assert.equal(run("$('#dropTitle').textContent"), '已选择 2 个 PDF');
 });
 
+test('batch upload workers keep at most two imports active', async () => {
+  const { run } = app();
+  const result = await run(`(async () => {
+    let active = 0; let maximum = 0; const completed = [];
+    await runUploadWorkers([1, 2, 3, 4], 2, async item => {
+      active += 1; maximum = Math.max(maximum, active);
+      await Promise.resolve();
+      completed.push(item); active -= 1;
+    });
+    return JSON.stringify({ maximum, completed });
+  })()`);
+  assert.deepEqual(JSON.parse(result), { maximum: 2, completed: [1, 2, 3, 4] });
+});
+
+test('background tasks remain separate and can be focused again', () => {
+  const { run } = app();
+  run('renderTaskUI = () => {}; state.taskIds = {}; state.tasks = new Map(); state.taskA = beginTask("任务 A"); state.taskB = beginTask("任务 B"); backgroundTask(state.taskA); backgroundTask(state.taskB);');
+  assert.equal(run('state.tasks.size'), 2);
+  run('focusTask(state.taskA);');
+  assert.equal(run('state.focusTaskId'), run('state.taskA'));
+  assert.equal(run('state.tasks.get(state.taskA).background'), false);
+  assert.equal(run('state.tasks.get(state.taskB).background'), true);
+});
+
+test('marking one paper read preserves every other paper read state', async () => {
+  const { context, run } = app();
+  context.api = async () => ({ paper: { id: 'paper-a', read_state: 'read' } });
+  run("state.papers = [{ id: 'paper-a', read_state: 'unread' }, { id: 'paper-b', read_state: 'unread' }, { id: 'paper-c', read_state: 'read' }];");
+  await run("setPaperReadState('paper-a', 'read', false)");
+  assert.equal(run("state.papers.find(paper => paper.id === 'paper-a').read_state"), 'read');
+  assert.equal(run("state.papers.find(paper => paper.id === 'paper-b').read_state"), 'unread');
+  assert.equal(run("state.papers.find(paper => paper.id === 'paper-c').read_state"), 'read');
+});
+
 test('note autosave keeps the original paper and captured text after navigation', async () => {
   const { context, run } = app();
   const calls = [];

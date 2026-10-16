@@ -21,6 +21,12 @@ const state = {
   summaryRetryIds: new Set(),
   summaryTranslationIds: new Set(),
   batchRunning: false,
+  tasks: new Map(),
+  taskSequence: 0,
+  focusTaskId: null,
+  taskIds: {},
+  uploadTaskId: null,
+  metadataReview: [],
   currentPaper: null,
   activeSummarySource: "native",
   activeSummaryVariantId: null,
@@ -139,9 +145,162 @@ function toast(message, type = "success") {
   window.setTimeout(() => item.remove(), 4200);
 }
 
-function setBusy(active, text = "正在处理...") {
-  $("#busyText").textContent = text;
-  $("#busyOverlay").hidden = !active;
+function setBusy(active, text = "正在处理...", key = "legacy") {
+  if (active) {
+    if (!state.taskIds[key] || !state.tasks.has(state.taskIds[key])) {
+      state.taskIds[key] = beginTask(text);
+    } else {
+      updateTask(state.taskIds[key], text);
+    }
+  } else if (state.taskIds[key]) {
+    finishTask(state.taskIds[key]);
+    delete state.taskIds[key];
+  }
+}
+
+function beginTask(text, options = {}) {
+  const id = `task-${++state.taskSequence}`;
+  state.tasks.set(id, {
+    id,
+    text,
+    dialogId: options.dialogId || "",
+    focusPanel: options.focusPanel !== false,
+    background: Boolean(options.background),
+  });
+  if (options.focusPanel !== false) state.focusTaskId = id;
+  renderTaskUI();
+  return id;
+}
+
+function updateTask(id, text) {
+  const task = state.tasks.get(id);
+  if (!task) return;
+  task.text = text;
+  renderTaskUI();
+}
+
+function backgroundTask(id) {
+  const task = state.tasks.get(id);
+  if (!task) return;
+  task.background = true;
+  if (state.focusTaskId === id) state.focusTaskId = null;
+  if (task.dialogId) closeDialog(task.dialogId);
+  renderTaskUI();
+}
+
+function focusTask(id) {
+  const task = state.tasks.get(id);
+  if (!task) return;
+  task.background = false;
+  if (task.focusPanel) state.focusTaskId = id;
+  if (task.dialogId) openDialog(task.dialogId);
+  renderTaskUI();
+}
+
+function finishTask(id) {
+  const task = state.tasks.get(id);
+  if (!task) return;
+  state.tasks.delete(id);
+  if (state.focusTaskId === id) state.focusTaskId = null;
+  renderTaskUI();
+}
+
+function startMetadataValidation(paperIds) {
+  const ids = [...new Set(paperIds || [])].filter(Boolean);
+  if (!ids.length || state.settings.provider !== "openai_compatible") return;
+  const taskId = beginTask(`正在复核 ${ids.length} 篇论文的标题和作者…`, { focusPanel: false, background: true });
+  fetch("/api/papers/validate-metadata", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paper_ids: ids }),
+  }).then((response) => response.json().then((data) => ({ response, data })))
+    .then(({ response, data }) => {
+      if (!response.ok) throw new Error(data.error || "元数据复核失败");
+      const issues = (data.results || []).filter((item) => item.title_ok === false || item.authors_ok === false);
+      finishTask(taskId);
+      state.metadataReview = issues;
+      if (issues.length) {
+        renderMetadataReview();
+        openDialog("metadataReviewDialog");
+        toast(`元数据复核完成：发现 ${issues.length} 篇需要检查`);
+      } else toast("元数据复核完成，未发现明显问题");
+    })
+    .catch((error) => {
+      finishTask(taskId);
+      toast(error.message || "元数据复核失败", "error");
+    });
+}
+
+function renderMetadataReview() {
+  const list = $("#metadataReviewList");
+  list.replaceChildren();
+  for (const item of state.metadataReview) {
+    const paper = state.papers.find((candidate) => candidate.id === item.paper_id);
+    const article = make("article", "metadata-review-item");
+    article.append(make("h3", "", paper?.title || item.paper_id));
+    for (const [field, label, current, suggested, invalid] of [
+      ["title", "标题", paper?.title || "", item.suggested_title || "", item.title_ok !== false],
+      ["authors", "作者", paper?.authors || "", item.suggested_authors || "", item.authors_ok !== false],
+    ]) {
+      if (invalid || !suggested) continue;
+      const row = make("label", "metadata-review-field");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = true;
+      checkbox.dataset.paperId = item.paper_id;
+      checkbox.dataset.field = field;
+      checkbox.dataset.value = suggested;
+      row.append(checkbox, make("strong", "", label), make("span", "", `${current || "（空）"} → ${suggested}`));
+      article.append(row);
+    }
+    if (item.reason) article.append(make("p", "metadata-review-reason", item.reason));
+    list.append(article);
+  }
+}
+
+async function applyMetadataReview() {
+  const selected = $$('input[data-paper-id]', $("#metadataReviewList")).filter((input) => input.checked);
+  const updates = new Map();
+  selected.forEach((input) => {
+    const fields = updates.get(input.dataset.paperId) || {};
+    fields[input.dataset.field] = input.dataset.value;
+    updates.set(input.dataset.paperId, fields);
+  });
+  try {
+    await Promise.all([...updates].map(([paperId, fields]) => api(`/api/papers/${paperId}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields),
+    })));
+    closeDialog("metadataReviewDialog");
+    state.metadataReview = [];
+    await loadLibrary();
+    toast(`已应用 ${selected.length} 项元数据修改`);
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function renderTaskUI() {
+  const focus = state.tasks.get(state.focusTaskId);
+  const overlay = $("#busyOverlay");
+  const backgroundButton = $("#busyBackgroundButton");
+  const showFocus = Boolean(focus?.focusPanel && !focus.background);
+  overlay.hidden = !showFocus;
+  if (showFocus) {
+    $("#busyText").textContent = focus.text;
+    backgroundButton.hidden = false;
+    backgroundButton.onclick = () => backgroundTask(focus.id);
+  }
+  const stack = $("#taskStack");
+  stack.replaceChildren();
+  for (const task of state.tasks.values()) {
+    if (!task.background) continue;
+    const card = make("button", "task-card", "");
+    card.type = "button";
+    card.title = "打开任务界面";
+    card.append(make("span", "mini-spinner"), make("strong", "", task.text));
+    card.addEventListener("click", () => focusTask(task.id));
+    stack.append(card);
+  }
 }
 
 function openDialog(id) {
@@ -445,8 +604,7 @@ async function setPaperReadState(paperId, readState, render = true) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ read_state: readState }),
   });
-  const index = state.papers.findIndex((paper) => paper.id === paperId);
-  if (index >= 0) state.papers[index] = result.paper;
+  state.papers = state.papers.map((paper) => paper.id === paperId ? result.paper : paper);
   if (state.currentPaper?.id === paperId) state.currentPaper.read_state = readState;
   if (render) renderLibrary();
   return result.paper;
@@ -3513,6 +3671,10 @@ function activateVisualAsset(asset, language) {
 }
 
 function showUploadDialog() {
+  if (state.uploadTaskId) {
+    focusTask(state.uploadTaskId);
+    return;
+  }
   $("#uploadForm").reset();
   $("#dropTitle").textContent = "选择一个或多个 PDF";
   $("#dropMeta").textContent = "或拖放到此处，单个文件最大 100 MB";
@@ -3522,6 +3684,7 @@ function showUploadDialog() {
   $("#singlePaperMetadata").hidden = false;
   $("#uploadSubmitButton").textContent = "开始导入";
   $("#uploadSubmitButton").disabled = false;
+  $("#uploadBackgroundButton").hidden = !state.uploadTaskId;
   renderTagPickers();
   updateProviderHint();
   openDialog("uploadDialog");
@@ -3585,7 +3748,7 @@ async function bootstrapLocalSettings() {
     : "检测到本地 .env.local 配置。确认后会将配置保存到本机 SQLite。";
   const accepted = await confirmAction("发现本地模型配置", detail);
   if (!accepted) return false;
-  setBusy(true, "正在导入本地模型配置…");
+  setBusy(true, "正在导入本地模型配置…", "settings");
   try {
     const result = await api("/api/settings/import-local", { method: "POST" });
     state.settings = result.settings;
@@ -3598,7 +3761,7 @@ async function bootstrapLocalSettings() {
     showSettingsDialog();
     return false;
   } finally {
-    setBusy(false);
+    setBusy(false, "", "settings");
   }
 }
 
@@ -3693,6 +3856,19 @@ async function importModelSettings(event) {
   }
 }
 
+async function runUploadWorkers(items, workerCount, worker) {
+  let nextIndex = 0;
+  async function consume() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await worker(items[index], index);
+    }
+  }
+  const count = Math.min(Math.max(1, workerCount), items.length);
+  await Promise.all(Array.from({ length: count }, () => consume()));
+}
+
 async function handleUpload(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -3721,10 +3897,18 @@ async function handleUpload(event) {
   let skippedDuplicates = 0;
   let englishFailures = 0;
   let translationFailures = 0;
+  let completed = 0;
   const tagIds = $$("#uploadTagPicker input:checked").map((input) => input.value);
-  for (let index = 0; index < files.length; index += 1) {
-    const file = files[index];
-    submit.textContent = `正在导入 ${index + 1} / ${files.length}`;
+  const uploadWorkerCount = files.length > 2 ? 2 : 1;
+  state.uploadTaskId = beginTask(
+    uploadWorkerCount > 1 ? `正在并发导入 ${files.length} 篇论文…` : "正在导入论文…",
+    { dialogId: "uploadDialog", focusPanel: false },
+  );
+  $("#uploadBackgroundButton").hidden = false;
+  const processUpload = async (file, index) => {
+    submit.textContent = uploadWorkerCount > 1
+      ? `并发导入中 ${completed} / ${files.length}`
+      : `正在导入 ${index + 1} / ${files.length}`;
     setUploadFileStatus(index, "processing", form.elements.generate_summary.checked ? "解析并生成摘要" : "正在解析 PDF");
     const data = new FormData(form);
     data.delete("file");
@@ -3751,21 +3935,35 @@ async function handleUpload(event) {
         setUploadFileStatus(index, "success", "导入完成");
       }
     } catch (error) {
-      failures.push({ file, message: error.message });
+      failures.push({ file, index, message: error.message });
       setUploadFileStatus(index, "error", error.message || "导入失败");
+    } finally {
+      completed += 1;
+      if (uploadWorkerCount > 1) {
+        submit.textContent = `并发导入中 ${completed} / ${files.length}`;
+        updateTask(state.uploadTaskId, `正在并发导入论文（${completed} / ${files.length}）…`);
+      } else {
+        updateTask(state.uploadTaskId, `正在导入论文（${completed} / ${files.length}）…`);
+      }
     }
-  }
+  };
+  await runUploadWorkers(files, uploadWorkerCount, processUpload);
 
   await Promise.all([loadLibrary(), loadTags()]).catch(handleError);
+  startMetadataValidation(successes.map((paper) => paper.id));
+  finishTask(state.uploadTaskId);
+  state.uploadTaskId = null;
+  $("#uploadBackgroundButton").hidden = true;
   state.batchRunning = false;
   submit.disabled = false;
   if (failures.length) {
     const transfer = new DataTransfer();
-    failures.forEach(({ file }) => transfer.items.add(file));
+    failures.sort((left, right) => left.index - right.index).forEach(({ file }) => transfer.items.add(file));
     $("#pdfInput").files = transfer.files;
     showSelectedFiles(transfer.files);
-    failures.forEach((failure, index) => setUploadFileStatus(index, "error", failure.message));
+    failures.forEach((failure) => setUploadFileStatus(failure.index, "error", failure.message));
     submit.textContent = "重试失败项";
+    openDialog("uploadDialog");
     toast(`${successes.length} 篇导入成功，${failures.length} 篇失败，可直接重试失败项`, "error");
     return;
   }
@@ -3827,13 +4025,13 @@ async function regenerateSummary() {
     toast("双语研究摘要需要先配置 OpenAI 兼容模型", "error");
     return;
   }
-  setBusy(true, "模型正在通读全文并撰写英文研究摘要...");
+  setBusy(true, "模型正在通读全文并撰写英文研究摘要...", "summary");
   try {
     const result = await api(`/api/papers/${paper.id}/generate-summary`, { method: "POST" });
     cacheUpdatedPaper(result.paper);
     if (state.currentPaper?.id === paper.id) renderReader();
     await loadLibrary();
-    setBusy(false);
+    setBusy(false, "", "summary");
     toast("英文研究摘要已完成，正在生成中文翻译");
     await retrySummaryTranslation({ quietStart: true, paper: result.paper });
   } catch (error) {
@@ -3843,7 +4041,7 @@ async function regenerateSummary() {
     }
     handleError(error);
   } finally {
-    setBusy(false);
+    setBusy(false, "", "summary");
   }
 }
 
@@ -3957,7 +4155,7 @@ async function deleteCurrentPaper() {
   if (!paper) return;
   const accepted = await confirmAction("移入回收站", `“${paper.title}”将从资料库隐藏，PDF、摘要、图表和批注会原样保留。`);
   if (!accepted) return;
-  setBusy(true, "正在删除论文...");
+  setBusy(true, "正在删除论文...", "delete");
   try {
     await api(`/api/papers/${paper.id}`, { method: "DELETE" });
     state.currentPaper = null;
@@ -3967,7 +4165,7 @@ async function deleteCurrentPaper() {
   } catch (error) {
     handleError(error);
   } finally {
-    setBusy(false);
+    setBusy(false, "", "delete");
   }
 }
 
@@ -4255,6 +4453,10 @@ function bindEvents() {
     if (!state.pdfScrollFrame) state.pdfScrollFrame = requestAnimationFrame(updatePdfCurrentPage);
   });
   $("#uploadForm").addEventListener("submit", handleUpload);
+  $("#metadataReviewForm").addEventListener("submit", (event) => { event.preventDefault(); applyMetadataReview(); });
+  $("#uploadBackgroundButton").addEventListener("click", () => {
+    if (state.uploadTaskId) backgroundTask(state.uploadTaskId);
+  });
   $("#batchTagsForm").addEventListener("submit", handleBatchTags);
   $("#editForm").addEventListener("submit", handleEdit);
   $("#newTagForm").addEventListener("submit", createTag);

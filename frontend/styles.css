@@ -384,6 +384,14 @@ h3.structured-heading { margin: 22px 0 9px; color: #4c415b; font-size: 13px; }
 .doubao-import-progress > p { margin: 2px 0 0 33px; color: var(--accent); font-size: 12px; font-weight: 750; }
 .doubao-edit-body { display: grid; gap: 16px; }
 .doubao-edit-textarea { min-height: 390px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.65; }
+.metadata-review-list { display: grid; gap: 12px; }
+.metadata-review-item { padding: 13px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.metadata-review-item h3 { margin: 0 0 8px; font-size: 13px; }
+.metadata-review-field { display: grid; grid-template-columns: 22px 72px minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.55; }
+.metadata-review-field input { margin-top: 3px; }
+.metadata-review-field strong { color: var(--muted); font-weight: 700; }
+.metadata-review-field span { overflow-wrap: anywhere; }
+.metadata-review-reason { margin: 9px 0 0 102px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 @keyframes import-step-pulse { 50% { box-shadow: 0 0 0 7px rgba(104,83,216,.04); } }
 .external-mapped-block { border-radius: 3px; transition: background 160ms ease, box-shadow 160ms ease; cursor: pointer; }
 .external-mapped-block:hover { background: rgba(52,97,141,.06); }
@@ -689,8 +697,15 @@ h3.structured-heading { margin: 22px 0 9px; color: #4c415b; font-size: 13px; }
 .pdf-annotation-footer .primary-button { min-height: 30px; padding: 0 11px; font-size: 12px; }
 .annotation-delete-button { min-height: 28px; padding: 0 4px; border: 0; background: transparent; color: var(--coral); font-size: 12px; font-weight: 700; cursor: pointer; }
 
-.busy-overlay { position: fixed; z-index: 100; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: rgba(247,247,250,.86); backdrop-filter: blur(5px); }
-.busy-overlay strong { font-size: 12px; }
+.busy-overlay { position: fixed; z-index: 100; top: 50%; left: 50%; display: flex; align-items: center; gap: 10px; max-width: min(460px, calc(100vw - 36px)); padding: 14px 16px; border: 1px solid #d8d0ee; border-radius: 10px; background: rgba(255,255,255,.98); color: var(--ink); box-shadow: 0 14px 34px rgba(35,28,67,.18); transform: translate(-50%, -50%); pointer-events: auto; }
+.busy-overlay strong { font-size: 12px; line-height: 1.45; }
+.task-background-button { flex: 0 0 auto; min-height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); color: var(--accent-dark); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.task-background-button:hover { border-color: var(--accent); background: var(--accent-soft); }
+.task-stack { position: fixed; z-index: 101; right: 18px; bottom: 82px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: min(390px, calc(100vw - 36px)); pointer-events: none; }
+.task-card { display: flex; align-items: center; gap: 9px; min-width: 250px; max-width: 390px; padding: 10px 13px; border: 1px solid #d8d0ee; border-radius: 9px; background: rgba(255,255,255,.98); color: var(--ink); box-shadow: 0 10px 26px rgba(35,28,67,.15); text-align: left; cursor: pointer; pointer-events: auto; }
+.task-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.task-card strong { overflow: hidden; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.task-card .mini-spinner { flex: 0 0 auto; }
 .spinner { width: 30px; height: 30px; border: 3px solid #cfd9d5; border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .toast-region { position: fixed; z-index: 120; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }

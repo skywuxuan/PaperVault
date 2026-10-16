@@ -258,7 +258,7 @@
           <span id="dropMeta">或拖放到此处，单个文件最大 100 MB</span>
         </label>
         <div id="uploadFileQueue" class="upload-file-queue" hidden></div>
-        <p id="batchUploadNote" class="batch-upload-note" hidden>批量导入时将自动识别每篇论文的标题、作者和年份；下方标签与摘要设置会应用到全部文件。</p>
+        <p id="batchUploadNote" class="batch-upload-note" hidden>批量导入时将自动识别每篇论文的标题、作者和年份；超过 2 篇时会同时处理 2 篇。下方标签与摘要设置会应用到全部文件。</p>
         <div id="singlePaperMetadata" class="form-grid two-columns">
           <label class="field field-wide"><span>标题</span><input name="title" type="text" placeholder="自动从 PDF 识别"></label>
           <label class="field"><span>作者</span><input name="authors" type="text" placeholder="作者，多人可用逗号分隔"></label>
@@ -277,6 +277,7 @@
       </div>
       <div class="modal-footer">
         <button class="secondary-button" type="button" data-close-dialog="uploadDialog">取消</button>
+        <button id="uploadBackgroundButton" class="secondary-button" type="button" hidden>后台运行</button>
         <button id="uploadSubmitButton" class="primary-button" type="submit">开始导入</button>
       </div>
     </form>
@@ -519,9 +520,10 @@
     </div>
   </dialog>
 
-  <div id="busyOverlay" class="busy-overlay" hidden>
-    <span class="spinner"></span><strong id="busyText">正在处理...</strong>
+  <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>
+    <span class="spinner"></span><strong id="busyText">正在处理...</strong><button id="busyBackgroundButton" class="task-background-button" type="button">后台运行</button>
   </div>
+  <div id="taskStack" class="task-stack" aria-live="polite" aria-label="后台任务"></div>
   <div id="wordPopover" class="word-popover" role="dialog" aria-label="加入单词本" hidden>
     <button id="closeWordPopover" class="word-popover-close" type="button" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
     <div class="word-popover-heading">
@@ -582,6 +584,19 @@
         </div>
       </div>
       <div class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="doubaoImportDialog">取消</button><button id="doubaoImportSubmit" class="primary-button" type="submit">导入解析</button></div>
+    </form>
+  </dialog>
+  <dialog id="metadataReviewDialog" class="modal large-modal" aria-labelledby="metadataReviewDialogTitle">
+    <form id="metadataReviewForm" method="dialog">
+      <div class="modal-header">
+        <div><p class="eyebrow">METADATA REVIEW</p><h2 id="metadataReviewDialogTitle">标题与作者复核</h2></div>
+        <button class="icon-button modal-close" type="button" data-close-dialog="metadataReviewDialog" aria-label="关闭" title="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+      </div>
+      <div class="modal-body metadata-review-body">
+        <p class="external-import-intro">模型只提供建议，不会自动覆盖论文信息。勾选需要修改的字段后再应用。</p>
+        <div id="metadataReviewList" class="metadata-review-list"></div>
+      </div>
+      <div class="modal-footer"><button class="secondary-button" type="button" data-close-dialog="metadataReviewDialog">稍后处理</button><button id="metadataReviewApply" class="primary-button" type="submit">应用选中修改</button></div>
     </form>
   </dialog>
   <dialog id="doubaoEditDialog" class="modal large-modal" aria-labelledby="doubaoEditDialogTitle">
