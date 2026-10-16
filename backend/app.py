@@ -77,6 +77,7 @@ PAPER_SUMMARY_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/generate-summary$")
 PAPER_SUMMARY_TRANSLATION_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/translate-summary$")
 TRASH_RESTORE_RE = re.compile(r"^/api/trash/([0-9a-f-]+)/restore$")
 TAG_ROUTE_RE = re.compile(r"^/api/tags/([0-9a-f-]+)$")
+TAG_REORDER_RE = re.compile(r"^/api/tags/reorder$")
 VOCABULARY_ROUTE_RE = re.compile(r"^/api/vocabulary/([0-9a-f-]+)$")
 PAPER_ANNOTATIONS_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/annotations$")
 ANNOTATION_ROUTE_RE = re.compile(r"^/api/annotations/([0-9a-f-]+)$")
@@ -326,15 +327,28 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/papers":
             query = parse_qs(parsed.query)
+            try:
+                page = max(1, int(query.get("page", ["1"])[0]))
+                page_size = max(1, min(200, int(query.get("page_size", ["0"])[0])))
+            except ValueError:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid pagination parameters")
+                return
+            page_size_value = page_size or None
+            total = self.server.db.count_papers(
+                query.get("q", [""])[0], query.get("tag", [""])[0],
+                query.get("summary", [""])[0], query.get("rating", [""])[0],
+            )
             papers = self.server.db.list_papers(
                 query.get("q", [""])[0],
                 query.get("tag", [""])[0],
                 query.get("sort", ["recent"])[0],
                 query.get("summary", [""])[0],
                 query.get("rating", [""])[0],
+                page,
+                page_size_value,
             )
             self.send_json(
-                {"papers": papers, "total": len(papers), "facets": self.server.db.library_facets()}
+                {"papers": papers, "total": total, "page": page, "page_size": page_size_value or total, "facets": self.server.db.library_facets()}
             )
             return
         if path == "/api/trash":
@@ -526,6 +540,9 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
         match = VARIANT_ROUTE_RE.match(path)
         if match:
             self.update_summary_variant(match.group(1))
+            return
+        if TAG_REORDER_RE.match(path):
+            self.reorder_tags()
             return
         if path == "/api/settings":
             self.update_settings()
@@ -1628,6 +1645,18 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.CONFLICT, "A tag with this name already exists")
             return
         self.send_json({"tag": tag}, HTTPStatus.CREATED)
+
+    def reorder_tags(self) -> None:
+        try:
+            payload = self.read_json()
+            tag_ids = payload.get("tag_ids")
+            if not isinstance(tag_ids, list):
+                raise ValueError("tag_ids must be a list")
+            tags = self.server.db.reorder_tags([str(tag_id) for tag_id in tag_ids])
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"tags": tags})
 
     def update_tag(self, tag_id: str) -> None:
         try:

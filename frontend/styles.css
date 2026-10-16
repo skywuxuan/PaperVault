@@ -95,6 +95,11 @@ button:disabled { opacity: .55; cursor: wait; }
 .facet-icon.star { color: #d39a1d; }
 .facet-icon.muted { color: #a7b0ad; }
 .tag-filters:empty::after { content: "暂无标签"; display: block; padding: 8px; color: #96a09c; font-size: 12px; }
+.tag-more-button { margin-top: 3px; }
+.tag-filter-item { position: relative; }
+.tag-filter-handle { display: none; margin-left: auto; color: var(--muted); cursor: grab; font-size: 14px; line-height: 1; }
+.tag-filter-item:hover .tag-filter-handle, .tag-filter-item.dragging .tag-filter-handle { display: inline-block; }
+.tag-filter-item.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .sidebar-manage-button { width: 100%; min-height: 36px; margin-top: 6px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; font-size: 12px; font-weight: 500; }
 .sidebar-manage-button:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-dark); }
 
@@ -149,6 +154,9 @@ button:disabled { opacity: .55; cursor: wait; }
 .paper-checkbox input:indeterminate + span::after { content: "−"; color: white; font-size: 12px; font-weight: 900; }
 
 .paper-list { overflow-anchor: none; background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px; }
+.library-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 18px 0 4px; color: var(--muted); font-size: 12px; }
+.library-pagination .secondary-button { min-height: 32px; padding: 0 12px; font-size: 12px; }
+.library-pagination button:disabled { opacity: .45; cursor: default; }
 .paper-row { position: relative; display: grid; grid-template-columns: 26px minmax(0,1fr) 228px 26px; gap: 14px; align-items: center; min-height: 92px; padding: 14px 20px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background 140ms ease, box-shadow 140ms ease; }
 .paper-row:hover { background: #fcfbff; }
 .paper-row.unread { box-shadow: inset 3px 0 #a698e5; }

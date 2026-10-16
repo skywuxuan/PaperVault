@@ -12,7 +12,7 @@ from typing import Any, Iterator
 from .config import apply_environment_settings
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 SCHEMA = """
@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS tags (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL COLLATE NOCASE UNIQUE,
     color TEXT NOT NULL DEFAULT '#28786f',
+    sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -319,6 +320,11 @@ class Database:
             }.items():
                 if column not in columns:
                     connection.execute(f"ALTER TABLE papers ADD COLUMN {column} {declaration}")
+            tag_columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(tags)").fetchall()}
+            if "sort_order" not in tag_columns:
+                connection.execute("ALTER TABLE tags ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+                for index, row in enumerate(connection.execute("SELECT id FROM tags ORDER BY name COLLATE NOCASE").fetchall()):
+                    connection.execute("UPDATE tags SET sort_order = ? WHERE id = ?", (index, row["id"]))
             for row in connection.execute("SELECT id, title, title_key FROM papers").fetchall():
                 title_key = normalize_title_key(row["title"])
                 if str(row["title_key"] or "") != title_key:
@@ -520,7 +526,7 @@ class Database:
                 LEFT JOIN paper_tags pt ON pt.tag_id = t.id
                 LEFT JOIN papers p ON p.id = pt.paper_id AND p.deleted_at IS NULL
                 GROUP BY t.id
-                ORDER BY t.name COLLATE NOCASE
+                ORDER BY t.sort_order, t.name COLLATE NOCASE
                 """
             ).fetchall()
         return [dict(row) for row in rows]
@@ -528,9 +534,10 @@ class Database:
     def create_tag(self, tag_id: str, name: str, color: str) -> dict[str, Any]:
         now = utc_now()
         with self.connect() as connection:
+            next_order = int(connection.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM tags").fetchone()[0])
             connection.execute(
-                "INSERT INTO tags(id, name, color, created_at) VALUES (?, ?, ?, ?)",
-                (tag_id, name.strip(), color, now),
+                "INSERT INTO tags(id, name, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?)",
+                (tag_id, name.strip(), color, next_order, now),
             )
         return {"id": tag_id, "name": name.strip(), "color": color, "paper_count": 0}
 
@@ -544,6 +551,15 @@ class Database:
                 return None
         return next((tag for tag in self.list_tags() if tag["id"] == tag_id), None)
 
+    def reorder_tags(self, tag_ids: list[str]) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            known = {str(row["id"]) for row in connection.execute("SELECT id FROM tags").fetchall()}
+            ordered = [tag_id for tag_id in dict.fromkeys(tag_ids) if tag_id in known]
+            ordered.extend(tag_id for tag_id in known if tag_id not in ordered)
+            for index, tag_id in enumerate(ordered):
+                connection.execute("UPDATE tags SET sort_order = ? WHERE id = ?", (index, tag_id))
+        return self.list_tags()
+
     def delete_tag(self, tag_id: str) -> bool:
         with self.connect() as connection:
             cursor = connection.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
@@ -556,6 +572,8 @@ class Database:
         sort: str = "recent",
         summary_filter: str = "",
         rating_filter: str = "",
+        page: int = 1,
+        page_size: int | None = None,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = ["p.deleted_at IS NULL"]
         params: list[Any] = []
@@ -601,6 +619,13 @@ class Database:
             "title_asc": "p.title COLLATE NOCASE ASC",
             "title_desc": "p.title COLLATE NOCASE DESC",
         }.get(sort, "p.created_at DESC")
+        pagination = ""
+        pagination_params: list[Any] = []
+        if page_size is not None:
+            safe_page_size = max(1, min(int(page_size), 200))
+            safe_page = max(1, int(page))
+            pagination = " LIMIT ? OFFSET ?"
+            pagination_params = [safe_page_size, (safe_page - 1) * safe_page_size]
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -608,11 +633,21 @@ class Database:
                 FROM papers p
                 {where}
                 ORDER BY {order_by}
+                {pagination}
                 """,
-                params,
+                [*params, *pagination_params],
             ).fetchall()
             papers = [self._paper_dict(connection, row, include_variants=False) for row in rows]
         return papers
+
+    def count_papers(
+        self,
+        query: str = "",
+        tag_id: str = "",
+        summary_filter: str = "",
+        rating_filter: str = "",
+    ) -> int:
+        return len(self.list_papers(query, tag_id, "recent", summary_filter, rating_filter))
 
     def library_facets(self) -> dict[str, Any]:
         with self.connect() as connection:

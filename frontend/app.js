@@ -12,9 +12,14 @@ const state = {
   localConfig: { available: false, has_api_key: false, keys: [] },
   query: "",
   tagId: "",
+  tagExpanded: false,
+  draggedTagId: null,
   summaryFilter: "all",
   ratingFilter: "all",
   librarySort: "recent_desc",
+  libraryPage: 1,
+  libraryPageSize: 20,
+  libraryTotal: 0,
   libraryScrollY: 0,
   libraryFacets: { total: 0, summary: {}, rating: {} },
   selectedPaperIds: new Set(),
@@ -383,9 +388,12 @@ async function loadLibrary() {
   if (state.summaryFilter !== "all") params.set("summary", state.summaryFilter);
   if (state.ratingFilter !== "all") params.set("rating", state.ratingFilter);
   params.set("sort", state.librarySort);
+  params.set("page", String(state.libraryPage));
+  params.set("page_size", String(state.libraryPageSize));
   const data = await api(`/api/papers?${params}`);
   if (requestId !== state.libraryRequestId) return;
   state.papers = data.papers;
+  state.libraryTotal = Number(data.total) || 0;
   state.libraryFacets = data.facets || state.libraryFacets;
   renderLibrary();
 }
@@ -466,7 +474,10 @@ function renderLibrary() {
   $("#allPaperCount").textContent = total;
   $("#libraryTotalInline").textContent = total;
   const activeTag = state.tags.find((tag) => tag.id === state.tagId);
-  $("#resultText").textContent = `${state.papers.length} 篇论文`;
+  const pageCount = Math.max(1, Math.ceil(state.libraryTotal / state.libraryPageSize));
+  $("#resultText").textContent = state.libraryTotal > state.libraryPageSize
+    ? `第 ${state.libraryPage} / ${pageCount} 页，共 ${state.libraryTotal} 篇论文`
+    : `${state.libraryTotal} 篇论文`;
   const filterLabels = [];
   if (state.query) filterLabels.push(`“${state.query}”`);
   if (activeTag) filterLabels.push(activeTag.name);
@@ -584,6 +595,12 @@ function renderLibrary() {
   selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
   $("#paperListHeader").hidden = state.papers.length === 0;
   updateBatchToolbar();
+  const pagination = $("#libraryPagination");
+  const hasPages = pageCount > 1;
+  pagination.hidden = !hasPages;
+  $("#libraryPageLabel").textContent = `第 ${state.libraryPage} / ${pageCount} 页`;
+  $("#libraryPreviousPage").disabled = state.libraryPage <= 1;
+  $("#libraryNextPage").disabled = state.libraryPage >= pageCount;
 
   const empty = $("#emptyState");
   empty.hidden = state.papers.length !== 0;
@@ -1087,10 +1104,11 @@ async function restoreResourcePackage() {
 function renderTagFilters() {
   const container = $("#tagFilters");
   container.replaceChildren();
-  for (const tag of state.tags) {
+  const visibleTags = state.tagExpanded ? state.tags : state.tags.slice(0, 10);
+  for (const tag of visibleTags) {
     const active = state.tagId === tag.id;
     const count = Number(tag.paper_count) || 0;
-    const button = make("button", `filter-item ${active ? "active" : ""}`);
+    const button = make("button", `filter-item tag-filter-item ${active ? "active" : ""}`);
     button.type = "button";
     button.dataset.tagId = tag.id;
     button.disabled = count === 0 && !active;
@@ -1098,13 +1116,41 @@ function renderTagFilters() {
     button.title = active ? `取消“${tag.name}”筛选` : count ? `筛选“${tag.name}”标签` : `暂无论文使用“${tag.name}”标签`;
     const dot = make("span", "filter-dot");
     dot.style.setProperty("--tag-color", tag.color);
-    button.append(dot, make("span", "", tag.name), make("span", `filter-count ${active ? "filter-clear" : ""}`, active ? "×" : `${count} 篇`));
+    const handle = make("span", "tag-filter-handle", "⠿");
+    handle.title = "拖动调整标签顺序";
+    handle.setAttribute("aria-label", `拖动调整标签 ${tag.name} 的顺序`);
+    button.draggable = true;
+    button.addEventListener("dragstart", (event) => { state.draggedTagId = tag.id; button.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; });
+    button.addEventListener("dragend", () => { state.draggedTagId = null; button.classList.remove("dragging"); $$(".tag-filter-item.drag-over").forEach((item) => item.classList.remove("drag-over")); });
+    button.addEventListener("dragover", (event) => { event.preventDefault(); button.classList.add("drag-over"); });
+    button.addEventListener("dragleave", () => button.classList.remove("drag-over"));
+    button.addEventListener("drop", (event) => { event.preventDefault(); button.classList.remove("drag-over"); reorderTags(state.draggedTagId, tag.id); });
+    button.append(dot, make("span", "", tag.name), make("span", `filter-count ${active ? "filter-clear" : ""}`, active ? "×" : `${count} 篇`), handle);
     button.addEventListener("click", () => selectTag(tag.id));
     container.append(button);
   }
+  const more = $("#tagMoreButton");
+  more.hidden = state.tags.length <= 10;
+  more.textContent = state.tagExpanded ? "收起标签" : `显示更多标签（${state.tags.length - 10}）`;
   const allButton = $(".filter-item[data-tag-id='']");
   renderAllPapersFilter();
   allButton.onclick = resetLibraryFilters;
+}
+
+async function reorderTags(draggedId, targetId) {
+  if (!draggedId || !targetId || draggedId === targetId) return;
+  const order = state.tags.map((tag) => tag.id);
+  const from = order.indexOf(draggedId);
+  const to = order.indexOf(targetId);
+  if (from < 0 || to < 0) return;
+  order.splice(from, 1); order.splice(to, 0, draggedId);
+  state.tags.sort((left, right) => order.indexOf(left.id) - order.indexOf(right.id));
+  renderTagFilters(); renderTagPickers();
+  try {
+    const data = await api("/api/tags/reorder", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tag_ids: order }) });
+    state.tags = data.tags || state.tags;
+    renderTagFilters(); renderTagPickers();
+  } catch (error) { handleError(error); }
 }
 
 function renderTagPickers() {
@@ -1354,6 +1400,7 @@ async function deleteVocabularyEntry(entry) {
 
 function selectTag(tagId) {
   state.tagId = tagId && state.tagId !== tagId ? tagId : "";
+  state.libraryPage = 1;
   clearPaperSelection(false);
   renderTagFilters();
   loadLibrary().catch(handleError);
@@ -1364,6 +1411,7 @@ function resetLibraryFilters() {
   state.tagId = "";
   state.summaryFilter = "all";
   state.ratingFilter = "all";
+  state.libraryPage = 1;
   $("#searchInput").value = "";
   clearPaperSelection(false);
   renderTagFilters();
@@ -4394,6 +4442,7 @@ function bindEvents() {
   $("#resourcePackageButton").addEventListener("click", () => showResourcePackageDialog().catch(handleError));
   $("#vocabularyButton").addEventListener("click", showVocabularyDialog);
   $("#sidebarManageTagsButton").addEventListener("click", () => { renderTagManager(); openDialog("tagsDialog"); });
+  $("#tagMoreButton").addEventListener("click", () => { state.tagExpanded = !state.tagExpanded; renderTagFilters(); });
   $("#backButton").addEventListener("click", () => { location.hash = ""; });
   $("#editPaperButton").addEventListener("click", showEditDialog);
   $("#regenerateButton").addEventListener("click", handleNativeSummaryAction);
@@ -4512,6 +4561,7 @@ function bindEvents() {
     state.summaryFilter = state.summaryFilter === button.dataset.summaryFilter
       ? "all"
       : button.dataset.summaryFilter;
+    state.libraryPage = 1;
     clearPaperSelection(false);
     loadLibrary().catch(handleError);
   });
@@ -4521,6 +4571,7 @@ function bindEvents() {
     state.ratingFilter = state.ratingFilter === button.dataset.ratingFilter
       ? "all"
       : button.dataset.ratingFilter;
+    state.libraryPage = 1;
     clearPaperSelection(false);
     loadLibrary().catch(handleError);
   });
@@ -4567,6 +4618,7 @@ function bindEvents() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       state.query = event.target.value.trim();
+      state.libraryPage = 1;
       clearPaperSelection(false);
       loadLibrary().catch(handleError);
     }, 220);
@@ -4574,12 +4626,25 @@ function bindEvents() {
   $("#clearSearchButton").addEventListener("click", () => {
     $("#searchInput").value = "";
     state.query = "";
+    state.libraryPage = 1;
     clearPaperSelection(false);
     loadLibrary().catch(handleError);
     $("#searchInput").focus();
   });
   $("#librarySort").addEventListener("change", (event) => {
     state.librarySort = event.target.value;
+    state.libraryPage = 1;
+    loadLibrary().catch(handleError);
+  });
+  $("#libraryPreviousPage").addEventListener("click", () => {
+    if (state.libraryPage <= 1) return;
+    state.libraryPage -= 1;
+    loadLibrary().catch(handleError);
+  });
+  $("#libraryNextPage").addEventListener("click", () => {
+    const pages = Math.max(1, Math.ceil(state.libraryTotal / state.libraryPageSize));
+    if (state.libraryPage >= pages) return;
+    state.libraryPage += 1;
     loadLibrary().catch(handleError);
   });
   $("#vocabularySearch").addEventListener("input", (event) => {

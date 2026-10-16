@@ -63,6 +63,7 @@
       </button>
       <div class="sidebar-section-title">标签类别</div>
       <div id="tagFilters" class="tag-filters"></div>
+      <button id="tagMoreButton" class="sidebar-manage-button tag-more-button" type="button" hidden>显示更多标签</button>
       <button id="sidebarManageTagsButton" class="sidebar-manage-button" type="button"><span aria-hidden="true">+</span> 管理标签</button>
       <div class="sidebar-section-title">摘要状态</div>
       <div id="summaryFilters" class="facet-list">
@@ -151,6 +152,11 @@
       </div>
 
       <div id="paperList" class="paper-list" aria-live="polite"></div>
+      <nav id="libraryPagination" class="library-pagination" aria-label="论文库分页" hidden>
+        <button id="libraryPreviousPage" class="secondary-button" type="button">上一页</button>
+        <span id="libraryPageLabel"></span>
+        <button id="libraryNextPage" class="secondary-button" type="button">下一页</button>
+      </nav>
 
       <div id="emptyState" class="empty-state" hidden>
         <div class="empty-symbol" aria-hidden="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-stack"></use></svg></div>

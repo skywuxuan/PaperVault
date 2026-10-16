@@ -9,6 +9,40 @@ from backend.database import Database
 
 
 class LibrarySortTestCase(unittest.TestCase):
+    def test_tag_order_is_persisted_and_new_tags_are_appended(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "paper.db")
+            database.initialize()
+            first = database.create_tag("tag-a", "Alpha", "#111111")
+            second = database.create_tag("tag-b", "Beta", "#222222")
+            third = database.create_tag("tag-c", "Gamma", "#333333")
+            self.assertEqual([tag["id"] for tag in database.list_tags()], [first["id"], second["id"], third["id"]])
+            self.assertEqual(
+                [tag["id"] for tag in database.reorder_tags([third["id"], first["id"], second["id"]])],
+                [third["id"], first["id"], second["id"],],
+            )
+            fourth = database.create_tag("tag-d", "Delta", "#444444")
+            self.assertEqual([tag["id"] for tag in database.list_tags()], [third["id"], first["id"], second["id"], fourth["id"]])
+
+    def test_library_pagination_returns_requested_page(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "paper.db")
+            database.initialize()
+            for index in range(45):
+                database.insert_paper({
+                    "id": f"paper-{index}", "title": f"Paper {index:02d}",
+                    "original_filename": f"paper-{index}.pdf", "stored_filename": f"paper-{index}.pdf",
+                    "created_at": f"2026-01-{(index % 28) + 1:02d}T00:00:00+00:00",
+                    "updated_at": f"2026-01-{(index % 28) + 1:02d}T00:00:00+00:00",
+                }, [])
+            first = database.list_papers(sort="title_asc", page=1, page_size=20)
+            third = database.list_papers(sort="title_asc", page=3, page_size=20)
+            self.assertEqual(len(first), 20)
+            self.assertEqual(len(third), 5)
+            self.assertEqual(first[0]["title"], "Paper 00")
+            self.assertEqual(third[0]["title"], "Paper 40")
+            self.assertEqual(database.count_papers(), 45)
+
     def test_unknown_years_are_last_in_both_directions_with_stable_same_year_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "paper.db")
