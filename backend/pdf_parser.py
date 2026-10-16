@@ -23,6 +23,22 @@ VISUAL_PRIORITY_RE = re.compile(
 )
 SPACE_RE = re.compile(r"[ \t]+")
 BLANK_RE = re.compile(r"\n{3,}")
+TITLE_PLACEHOLDER_RE = re.compile(
+    r"^(?:preprint(?:\s*[.]\s*under\s+review)?|submitted\s+to|"
+    r"anonymous(?:\s+submission)?|paper\s+submitted\s+to|under\s+review|"
+    r"manuscript\s+submitted|draft)\b.*",
+    re.I,
+)
+TITLE_NOISE_RE = re.compile(
+    r"^(?:see\s+discussions,?\s+stats,?\s+and\s+author\s+profiles|"
+    r"date\s+of\s+(?:publication|current\s+version)|"
+    r"digital\s+object\s+ident(?:ifier|iﬁer)|doi\s*:|conference\s+paper\s*[·.]?\s*|"
+    r"citations?\s*$|reads?\s*$|all\s+content\s+following|"
+    r"the\s+user\s+has\s+requested\s+enhancement|uploaded\s+by|"
+    r"this\s+work\s+has\s+been\s+submitted\s+to|"
+    r"which\s+this\s+version\s+may\s+no\s+longer\s+be\s+accessible)\b.*",
+    re.I,
+)
 
 
 def extract_pdf(path: Path, original_filename: str | None = None) -> dict[str, Any]:
@@ -38,8 +54,10 @@ def extract_pdf(path: Path, original_filename: str | None = None) -> dict[str, A
     inferred_title = infer_title(text, original_filename or path.name)
     title = _prefer_complete_title(metadata_title, inferred_title)
     author = normalize_pdf_authors(metadata.get("/Author"))
+    if author and _looks_like_title(author, title):
+        author = ""
     if not author and pages:
-        author = infer_authors(pages[0], title)
+        author = infer_authors("\n".join(pages[:2]), title)
     return {
         "text": text,
         "page_count": len(reader.pages),
@@ -65,7 +83,13 @@ def infer_title(text: str, filename: str) -> str:
     filename_title = Path(filename).stem.replace("_", " ").strip()
     filename_key = _title_key(filename_title)
     for index, line in enumerate(candidates[:12]):
-        if 12 <= len(line) <= 240 and not re.match(r"^(abstract|arxiv|doi|http)", line, re.I):
+        if (
+            12 <= len(line) <= 240
+            and not re.match(r"^(abstract|arxiv|doi|http)", line, re.I)
+            and not TITLE_PLACEHOLDER_RE.fullmatch(line)
+            and not TITLE_NOISE_RE.fullmatch(line)
+            and "researchgate.net/" not in line.casefold()
+        ):
             complete = line
             next_lines = candidates[index + 1 : index + 5]
             if (
@@ -95,11 +119,7 @@ def infer_title(text: str, filename: str) -> str:
 def _prefer_complete_title(metadata_title: str, inferred_title: str) -> str:
     if not metadata_title:
         return inferred_title
-    if re.fullmatch(
-        r"(?:submitted\s+to|anonymous(?:\s+submission)?|paper\s+submitted\s+to|under\s+review|manuscript\s+submitted|draft)\b.*",
-        metadata_title.strip(),
-        re.I,
-    ):
+    if TITLE_PLACEHOLDER_RE.fullmatch(metadata_title.strip()):
         return inferred_title
     metadata_key = _title_key(metadata_title)
     inferred_key = _title_key(inferred_title)
@@ -110,6 +130,18 @@ def _prefer_complete_title(metadata_title: str, inferred_title: str) -> str:
 
 def _title_key(value: str) -> str:
     return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def _looks_like_title(author: str, title: str) -> bool:
+    author_key = _title_key(author)
+    title_key = _title_key(title)
+    if not author_key or not title_key:
+        return False
+    return (
+        author_key == title_key
+        or title_key.startswith(author_key)
+        or (len(author_key) >= 18 and author_key.startswith(title_key))
+    )
 
 
 def infer_publication_year(text: str, filename: str) -> int | None:
@@ -231,27 +263,69 @@ def normalize_pdf_authors(value: Any) -> str:
     if re.fullmatch(r"(?:(?:19|20)\d{2}[\s,;/·-]*)+", author):
         return ""
     if re.fullmatch(
-        r"anonymous|unknown|admin(?:istrator)?|microsoft word|latex|arxiv",
+        r"anonymous|unknown|author\s+name\(s\)\s+withheld|admin(?:istrator)?|microsoft word|latex|arxiv",
         author,
         re.I,
     ):
         return ""
     if re.search(r"https?://|\bdoi\b|@", author, re.I):
         return ""
-    return author[:1000]
+    return SPACE_RE.sub(" ", author).strip()[:1000]
 
 
 def infer_authors(first_page_text: str, title: str = "") -> str:
     lines = [SPACE_RE.sub(" ", line).strip(" ,;|") for line in first_page_text.splitlines()]
     lines = [line for line in lines if line]
+    cleaned_lines: list[str] = []
+    for line in lines:
+        lowered = line.casefold()
+        if (
+            TITLE_NOISE_RE.fullmatch(line)
+            or "researchgate.net/" in lowered
+            or re.search(r"\b(?:\d+\s+)?authors?,?\s+including|\b(?:publications|citations|reads)\b|see\s+profile", lowered)
+            or re.match(r"^(?:arxiv|doi|https?://|\d+\s*$)", line, re.I)
+        ):
+            continue
+        if cleaned_lines and _title_key(cleaned_lines[-1]) == _title_key(line):
+            continue
+        cleaned_lines.append(line)
+    lines = cleaned_lines
     if not lines:
         return ""
+    if "researchgate.net/" in first_page_text.casefold():
+        for index, line in enumerate(lines[:-1]):
+            following = lines[index + 1].casefold()
+            if "," in line and re.search(r"\b(?:lab|university|institute|company|google|microsoft|bytedance)\b", following):
+                return line
     start = 0
-    title_key = re.sub(r"\W+", "", title).casefold()
-    if title_key:
+    title_key = _title_key(title)
+    title_index = None
+    for index, line in enumerate(lines[:12]):
+        line_key = _title_key(line)
+        if not line_key or TITLE_NOISE_RE.fullmatch(line) or TITLE_PLACEHOLDER_RE.fullmatch(line):
+            continue
+        if title_key and (title_key.startswith(line_key) or line_key.startswith(title_key)):
+            title_index = index
+            break
+    if title_index is None:
         for index, line in enumerate(lines[:12]):
-            if title_key[:80] and title_key[:80] in re.sub(r"\W+", "", line).casefold():
-                start = index + 1
+            if len(line) >= 12 and not TITLE_NOISE_RE.fullmatch(line) and not TITLE_PLACEHOLDER_RE.fullmatch(line):
+                title_index = index
+                break
+    if title_index is not None:
+        start = title_index + 1
+        combined_key = _title_key(lines[title_index])
+        while start < len(lines) and start <= title_index + 5:
+            continuation = lines[start]
+            continuation_key = _title_key(continuation)
+            proposed_key = _title_key(f"{combined_key} {continuation}")
+            if (
+                continuation.isupper()
+                or (title_key and title_key.startswith(proposed_key))
+            ) and not TITLE_NOISE_RE.fullmatch(continuation):
+                combined_key = proposed_key
+                start += 1
+            else:
                 break
     for line in lines[start : start + 12]:
         if re.match(r"^(abstract|摘要|keywords?|index terms?)\b", line, re.I):
@@ -265,6 +339,19 @@ def infer_authors(first_page_text: str, title: str = "") -> str:
         ):
             continue
         candidate = re.sub(r"\s*[†‡*]+\s*", " ", line).strip()
+        candidate = re.sub(r",?\s*(?:Student|Senior)?\s*Member,\s*IEEE\b", "", candidate, flags=re.I)
+        candidate = re.sub(r"(?<=\w)[0-9]+(?=\b)", "", candidate)
+        candidate = re.sub(r"(?<=\s)[0-9]+(?=\s*[;,]|$)", "", candidate)
+        candidate = re.sub(r"\s{2,}", " ", candidate).strip(" ,;")
+        line_index = lines.index(line)
+        following = " ".join(lines[line_index + 1 : line_index + 3]).casefold()
+        if len(candidate.split()) <= 3 and re.search(
+            r"\b(?:microsoft|google|bytedance|university|institute|lab|publications|citations|see profile)\b",
+            following,
+        ):
+            continue
+        if _looks_like_title(candidate, title):
+            continue
         if not normalize_pdf_authors(candidate):
             continue
         words = re.findall(r"[A-Za-z][A-Za-z'’-]*|[\u3400-\u9fff]{2,4}", candidate)

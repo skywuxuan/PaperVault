@@ -42,7 +42,7 @@ from .deep_summary import (
     translate_report_blocks,
     translation_model,
 )
-from .llm import SummaryError, generate_summary, translate_english
+from .llm import SummaryError, generate_summary, request_structured_json, translate_english
 from .offline_translation import OfflineTranslationError, translate_english_offline
 from .pronunciation import american_ipa
 from .pdf_parser import (
@@ -81,6 +81,7 @@ VOCABULARY_ROUTE_RE = re.compile(r"^/api/vocabulary/([0-9a-f-]+)$")
 PAPER_ANNOTATIONS_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/annotations$")
 ANNOTATION_ROUTE_RE = re.compile(r"^/api/annotations/([0-9a-f-]+)$")
 PAPER_VARIANTS_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/summary-variants$")
+METADATA_VALIDATE_RE = re.compile(r"^/api/papers/validate-metadata$")
 PAPER_NOTES_RE = re.compile(r"^/api/papers/([0-9a-f-]+)/notes$")
 VARIANT_TRANSLATION_RE = re.compile(r"^/api/summary-variants/([0-9a-f-]+)/translate-english$")
 VARIANT_ROUTE_RE = re.compile(r"^/api/summary-variants/([0-9a-f-]+)$")
@@ -453,6 +454,9 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/papers/batch":
             self.batch_papers()
+            return
+        if path == "/api/papers/validate-metadata":
+            self.validate_paper_metadata()
             return
         match = TRASH_RESTORE_RE.match(path)
         if match:
@@ -1128,6 +1132,66 @@ class PaperVaultHandler(BaseHTTPRequestHandler):
                 "processed_count": len(updated) + len(deleted),
             }
         )
+
+    def validate_paper_metadata(self) -> None:
+        try:
+            payload = self.read_json()
+            raw_ids = payload.get("paper_ids")
+            if not isinstance(raw_ids, list):
+                raise ValueError("paper_ids must be a list")
+            paper_ids = list(dict.fromkeys(str(item) for item in raw_ids if item))[:100]
+            if not paper_ids:
+                raise ValueError("paper_ids must not be empty")
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        settings = self.server.db.get_settings(include_secret=True)
+        if settings.get("provider") != "openai_compatible":
+            self.send_json({"results": [], "skipped": True, "reason": "metadata model is not configured"})
+            return
+        system = (
+            "You review bibliographic metadata extracted from a research PDF. "
+            "Check whether the proposed title and authors match the supplied first-page evidence. "
+            "Ignore publisher, ResearchGate, arXiv, DOI, copyright, conference, email, and download-cover noise. "
+            "Return strict JSON with results, where each result has paper_id, title_ok, authors_ok, "
+            "suggested_title, suggested_authors, confidence, and reason. "
+            "Use empty suggestions when the evidence is insufficient. Do not invent authors."
+        )
+        results: list[dict[str, Any]] = []
+        for paper_id in paper_ids:
+            paper = self.server.db.get_paper(paper_id, include_text=True)
+            if paper is None:
+                continue
+            source = str(paper.get("extracted_text", ""))[:9000]
+            user = json.dumps(
+                {
+                    "paper_id": paper_id,
+                    "proposed_title": paper.get("title", ""),
+                    "proposed_authors": paper.get("authors", ""),
+                    "first_pages_text": source,
+                },
+                ensure_ascii=False,
+            )
+            try:
+                data, _ = request_structured_json(system, user, settings, max_tokens=1800, timeout=180)
+                candidate = data.get("results", [data]) if isinstance(data, dict) else []
+                item = candidate[0] if isinstance(candidate, list) and candidate else {}
+                if not isinstance(item, dict):
+                    item = {}
+                results.append(
+                    {
+                        "paper_id": paper_id,
+                        "title_ok": bool(item.get("title_ok", True)),
+                        "authors_ok": bool(item.get("authors_ok", True)),
+                        "suggested_title": str(item.get("suggested_title", "")).strip()[:500],
+                        "suggested_authors": str(item.get("suggested_authors", "")).strip()[:1000],
+                        "confidence": str(item.get("confidence", "unknown"))[:30],
+                        "reason": str(item.get("reason", "")).strip()[:1000],
+                    }
+                )
+            except SummaryError as exc:
+                results.append({"paper_id": paper_id, "title_ok": True, "authors_ok": True, "error": str(exc)})
+        self.send_json({"results": results, "skipped": False})
 
     def create_annotation(self, paper_id: str) -> None:
         paper = self.server.db.get_paper(paper_id)

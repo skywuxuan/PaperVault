@@ -222,6 +222,55 @@ Body text."""
             infer_title(bytes_report, "End-to-end multilingual speech recognition and synthesis with bytes.pdf"),
             "BYTES ARE ALL YOU NEED: END-TO-END MULTILINGUAL SPEECH RECOGNITION AND SYNTHESIS WITH BYTES",
         )
+        preprint = """Preprint. Under review.
+ZIPFORMER : A FASTER AND BETTER ENCODER FOR
+AUTOMATIC SPEECH RECOGNITION
+Zengwei Yao, Liyong Guo
+ABSTRACT
+Body text."""
+        self.assertEqual(
+            infer_title(preprint, "ZIPFORMER.pdf"),
+            "ZIPFORMER : A FASTER AND BETTER ENCODER FOR AUTOMATIC SPEECH RECOGNITION",
+        )
+        self.assertEqual(
+            infer_authors(
+                "AN ANALYSIS OF INCORPORA TING AN EXTERNAL LANGUAGE MODEL INTO A\n"
+                "SEQUENCE-TO-SEQUENCE MODEL\nAnjuli Kannan, Yonghui Wu, Patrick Nguyen\nGoogle, Inc.\nABSTRACT",
+                "AN ANALYSIS OF INCORPORA TING AN EXTERNAL LANGUAGE MODEL INTO A SEQUENCE-TO-SEQUENCE MODEL",
+            ),
+            "Anjuli Kannan, Yonghui Wu, Patrick Nguyen",
+        )
+
+    def test_authors_can_be_read_from_the_next_page_after_download_cover_noise(self) -> None:
+        cover = "See discussions, stats, and author profiles for this publication at: https://www.researchgate.net/publication/352171342"
+        page_two = "Improving RNN Transducer Modeling for Small-Footprint\nKEYWORD SPOTTING\nYao Tian, Haitao Yao, Meng Cai, Yaming Liu, Zejun Ma\nBytedance AI Lab\nABSTRACT"
+        self.assertEqual(
+            infer_authors(f"{cover}\n{page_two}", "Improving RNN Transducer Modeling for Small-Footprint Keyword Spotting"),
+            "Yao Tian, Haitao Yao, Meng Cai, Yaming Liu, Zejun Ma",
+        )
+        researchgate = """See discussions, stats, and author profiles for this publication at: https://www.researchgate.net/publication/352171342
+Improving RNN Transducer Modeling for Small-Footprint Keyword Spotting
+Conference Paper · June 2021
+DOI: 10.1109/ICASSP39728.2021.9414339
+CITATIONS
+7
+ABSTRACT
+Body text."""
+        self.assertEqual(
+            infer_title(researchgate, "IMPROVING RNN TRANSDUCER MODELING FOR SMALL-FOOTPRINT KEYWORD SPOTTING.pdf"),
+            "Improving RNN Transducer Modeling for Small-Footprint Keyword Spotting",
+        )
+        ieee = """Date of publication xxxx 00, 0000, date of current version xxxx 00, 0000.
+Digital Object Identifier 10.1109/ACCESS.2017.DOI
+Deep Spoken Keyword Spotting: An
+Overview
+IVÁN LÓPEZ-ESPEJO, ZHENG-HUA TAN, JOHN HANSEN
+ABSTRACT
+Body text."""
+        self.assertEqual(
+            infer_title(ieee, "Deep Spoken Keyword Spotting An overView.pdf"),
+            "Deep Spoken Keyword Spotting: An Overview",
+        )
 
     def test_pdf_extraction_uses_original_filename_to_verify_title_continuation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
