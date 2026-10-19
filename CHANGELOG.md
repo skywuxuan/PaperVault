@@ -1,14 +1,39 @@
 # 版本记录
 
-这里记录 PaperVault 的用户可见变化。最新候选版为 [v1.2.0-rc.2](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2)，Windows 与 Apple Silicon Mac 下载位于同一发行页；Windows 稳定版为 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)。安装和升级方式见[桌面版指南](docs/DESKTOP.md)。
+这里记录 PaperVault 的用户可见变化。最新稳定版为 [v1.3.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.3.0)，Windows 与 Apple Silicon Mac 下载位于同一发行页。安装和升级方式见[桌面版指南](docs/DESKTOP.md)。
 
 ## [Unreleased]
 
-- 明确中文翻译的 JSON 输出格式，校验空译文与异常段落；翻译失败时保留英文报告和已有中文内容。
-- 中文栏区分未生成、翻译中与失败状态，并提供重试和模型设置入口；网络中断后可刷新服务端状态，不再一直显示误导的“生成中”。
-- 翻译错误提示区分模型权限、模型或地址不存在、请求格式不兼容等原因，避免仅显示笼统的生成失败。
-- Windows 桌面启动前检查关键 .NET DLL 的下载阻止标记；发现阻止时显示中文处理步骤，不再进入 Python.NET 的难读异常。程序不会自动解除文件锁定。
-- 桌面指南补充 `Python.Runtime.Loader.Initialize` 错误的排查方法：解除可信 ZIP 的锁定后重新完整解压。
+## [1.3.0] - 2026-10-19
+
+本版将论文导入、元数据校验、后台任务和论文库检索整理为稳定的日常工作流，并发布 Windows x64 与 Apple Silicon macOS 桌面包。
+
+### 导入与元数据
+
+- 多篇 PDF 导入使用 3 个并发任务，拖拽分批导入会递增追加并自动跳过重复文件。
+- 改进 PDF 首页标题、作者和发表年份识别，过滤 ResearchGate、投稿状态、版权页和日期噪声。
+- 批量导入完成后可运行标题与作者合理性复核；复核结果只提供建议，由用户选择是否应用。
+- 支持编辑已导入的豆包解析内容，并保留默认解析与豆包解析的独立来源。
+
+### 论文库与阅读器
+
+- 论文库支持每页 20 篇、发表时间和推荐度双向排序、阅读位置恢复，以及论文 PDF 下载。
+- 标签列表默认显示 10 个，支持展开更多、拖拽调整顺序；拖拽图标显示在标签右侧。
+- 修复单篇论文标记已读时误改全部论文的状态。
+- 导入、摘要生成和翻译任务支持后台运行；任务卡片可收起到右下角并按任务纵向排列，点击可返回原任务界面。
+
+### 搜索
+
+- 搜索结果按标题、作者、摘要、DOI 和标签相关性排序，标题优先于作者，作者优先于摘要。
+- 标题、作者和标签命中内容直接高亮；摘要命中显示包含关键词的句子摘录并高亮。
+- 搜索支持中英文引号清理和分页稳定刷新，不检索 PDF 全文以减少噪声。
+
+### 摘要与稳定性
+
+- 中文翻译校验 JSON 结构、空译文和异常段落；失败时保留英文报告与已有中文内容并支持重试。
+- 中文栏区分未生成、翻译中和失败状态；错误提示区分权限、地址、模型和请求格式问题。
+- 修复过期搜索、阅读器、资源校验和后台任务响应覆盖当前页面的问题。
+- Windows 桌面启动前检查关键 .NET DLL 的下载阻止标记，并补充 `Python.Runtime.Loader.Initialize` 排查说明。
 
 ## [1.2.0-rc.2] - 2026-09-16
 
@@ -128,7 +153,8 @@ PaperVault 首个 Windows 桌面正式版，将本地论文库和双语阅读器
 - 未配置模型时可使用本地结构索引；详细双语摘要需要在“模型设置”中配置 OpenAI 兼容接口。
 - 程序与用户数据分开存放，替换发行包不会覆盖默认数据目录。
 
-[Unreleased]: https://github.com/skywuxuan/PaperVault/compare/v1.2.0-rc.2...HEAD
+[Unreleased]: https://github.com/skywuxuan/PaperVault/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.3.0
 [1.2.0-rc.2]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2
 [1.2.0-rc.1]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.1
 [1.1.0]: https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0

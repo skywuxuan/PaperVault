@@ -1,17 +1,17 @@
 # PaperVault 桌面版
 
-[返回首页](../README.md) · [下载 v1.2.0-rc.2](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2) · [所有发行版](https://github.com/skywuxuan/PaperVault/releases/) · [版本记录](../CHANGELOG.md)
+[返回首页](../README.md) · [下载 v1.3.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.3.0) · [所有发行版](https://github.com/skywuxuan/PaperVault/releases/) · [版本记录](../CHANGELOG.md)
 
 桌面版将 PaperVault 的论文库与阅读器放进独立窗口。打开应用时会自动启动本地服务，关闭窗口时停止服务，无需另外打开终端或浏览器。
 
 ## 平台与发行状态
 
-最新桌面候选版为 **[v1.2.0-rc.2](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2)**，Windows 与 macOS 包在同一个 GitHub Release 下下载。Windows 稳定版 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) 和上一候选版 [v1.2.0-rc.1](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.1) 保留在历史发行页。
+最新桌面稳定版为 **[v1.3.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.3.0)**，Windows 与 macOS 包在同一个 GitHub Release 下下载。上一候选版 [v1.2.0-rc.2](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2) 保留在历史发行页。
 
-| 平台 | v1.2.0-rc.2 下载 | 窗口引擎 | 默认数据目录 |
+| 平台 | v1.3.0 下载 | 窗口引擎 | 默认数据目录 |
 | --- | --- | --- | --- |
-| Windows 10/11 x64 | [便携 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-windows-x64.zip) | Microsoft Edge WebView2 | `%LOCALAPPDATA%\PaperVault` |
-| macOS 14+ · Apple Silicon | [arm64 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-macos-arm64.zip) | 系统 WKWebView | `~/Library/Application Support/PaperVault` |
+| Windows 10/11 x64 | [便携 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.3.0/PaperVault-v1.3.0-windows-x64.zip) | Microsoft Edge WebView2 | `%LOCALAPPDATA%\PaperVault` |
+| macOS 14+ · Apple Silicon | [arm64 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.3.0/PaperVault-v1.3.0-macos-arm64.zip) | 系统 WKWebView | `~/Library/Application Support/PaperVault` |
 
 两种桌面版和 Web 服务共用前端、后端及资料格式，主要区别在窗口引擎、程序打开方式与默认数据目录。Intel Mac 与 Linux 暂无发行包；Linux 源码中的默认数据目录为 `$XDG_DATA_HOME/papervault`，未设置时使用 `~/.local/share/papervault`。
 

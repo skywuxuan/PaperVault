@@ -2,7 +2,7 @@
 
 **把论文读进去，把理解留下来。**
 
-[下载桌面版](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2) · [快速开始](#快速开始) · [桌面版指南](docs/DESKTOP.md) · [版本记录](CHANGELOG.md)
+[下载桌面版](https://github.com/skywuxuan/PaperVault/releases/tag/v1.3.0) · [快速开始](#快速开始) · [桌面版指南](docs/DESKTOP.md) · [版本记录](CHANGELOG.md)
 
 [![Desktop Release](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml/badge.svg)](https://github.com/skywuxuan/PaperVault/actions/workflows/windows-release.yml)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
@@ -15,21 +15,22 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 ## 下载桌面版
 
-最新候选版为 **[v1.2.0-rc.2](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2)**。两个平台的程序都在同一个 [GitHub Releases 页面](https://github.com/skywuxuan/PaperVault/releases/)，不需要到 Actions 查找下载。
+最新稳定版为 **[v1.3.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.3.0)**。两个平台的程序都在同一个 [GitHub Releases 页面](https://github.com/skywuxuan/PaperVault/releases/)，不需要到 Actions 查找下载。
 
 | 平台 | 下载 | 使用方式 |
 | --- | --- | --- |
-| Windows 10/11 x64 | [Windows 便携 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-windows-x64.zip) | 完整解压后运行 `PaperVault\PaperVault.exe` |
-| macOS 14+ · Apple Silicon（M 系列） | [macOS arm64 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-macos-arm64.zip) | 解压后将 `PaperVault.app` 拖入“应用程序” |
+| Windows 10/11 x64 | [Windows 便携 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.3.0/PaperVault-v1.3.0-windows-x64.zip) | 完整解压后运行 `PaperVault\PaperVault.exe` |
+| macOS 14+ · Apple Silicon（M 系列） | [macOS arm64 ZIP](https://github.com/skywuxuan/PaperVault/releases/download/v1.3.0/PaperVault-v1.3.0-macos-arm64.zip) | 解压后将 `PaperVault.app` 拖入“应用程序” |
 
-本版标记为预发布；Windows 稳定版 [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0) 仍可下载。Windows ZIP 不会自动创建快捷方式，也不会出现在“已安装的应用”中；macOS 包使用 ad hoc 签名，尚未完成 Developer ID 签名与 Apple 公证。详见[安装、打开与卸载说明](docs/DESKTOP.md#安装与首次使用)。
+本版为稳定版。Windows ZIP 不会自动创建快捷方式，也不会出现在“已安装的应用”中；macOS 包使用 ad hoc 签名，尚未完成 Developer ID 签名与 Apple 公证。详见[安装、打开与卸载说明](docs/DESKTOP.md#安装与首次使用)。
 
-![PaperVault Windows 桌面版 v1.2.0-rc.2 论文库](docs/images/library-preview.png)
+![PaperVault Windows 桌面版 v1.3.0 论文库](docs/images/library-preview.png)
 
-*Windows 桌面版 v1.2.0-rc.2 实际界面；图中的论文与标签来自本地资料库。*
+*Windows 桌面版 v1.3.0 实际界面；图中的论文与标签来自本地资料库。*
 
 ## 最近更新
 
+- **2026-10-19 · [v1.3.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.3.0)** — 完善论文导入、元数据复核、后台任务、分页与标签管理，新增相关性搜索、高亮命中和摘要句子摘录，并发布 Windows 与 Apple Silicon Mac 稳定版。[查看变更](CHANGELOG.md#130---2026-10-19)。
 - **2026-09-16 · [v1.2.0-rc.2](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.2)** — 收紧论文列表，固定摘要预览按钮的位置；使用“默认解析”和“豆包解析”直接切换内容，英文摘要单击选段、双击查词。Windows 与 Mac 下载放在同一发行页。[查看变更](CHANGELOG.md#120-rc2---2026-09-16)。
 - **2026-09-15 · [v1.2.0-rc.1](https://github.com/skywuxuan/PaperVault/releases/tag/v1.2.0-rc.1)** — 更新论文库与阅读器设计，修复笔记保存、摘要任务恢复和资源包兼容性问题，加入 Apple Silicon Mac 桌面版。
 - **2026-09-11 · [v1.1.0](https://github.com/skywuxuan/PaperVault/releases/tag/v1.1.0)** — 新增 `.pvault` 备份与恢复，把论文、PDF、摘要、笔记和单词本打包迁移。
@@ -76,7 +77,7 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 适用于 Windows 10/11 x64，无需自行安装 Python。
 
-1. 下载 [Windows v1.2.0-rc.2 便携包](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-windows-x64.zip)。
+1. 下载 [Windows v1.3.0 便携包](https://github.com/skywuxuan/PaperVault/releases/download/v1.3.0/PaperVault-v1.3.0-windows-x64.zip)。
 2. 完整解压到固定目录，保留 `PaperVault.exe` 旁的 `_internal` 等全部文件和目录；不要直接在 ZIP 内运行。
 3. 打开 `PaperVault\PaperVault.exe`，点击“导入 PDF”开始使用。
 
@@ -90,7 +91,7 @@ PaperVault 是一个本地优先的论文阅读与管理工具。把 PDF、双�
 
 适用于 macOS 14 或更高版本、Apple Silicon（M 系列）Mac，使用系统 WKWebView，无需另行安装 Python 或 WebView2。Intel Mac 暂未提供安装包。
 
-1. 从同一发行页下载 [macOS v1.2.0-rc.2 arm64 包](https://github.com/skywuxuan/PaperVault/releases/download/v1.2.0-rc.2/PaperVault-v1.2.0-rc.2-macos-arm64.zip)。
+1. 从同一发行页下载 [macOS v1.3.0 arm64 包](https://github.com/skywuxuan/PaperVault/releases/download/v1.3.0/PaperVault-v1.3.0-macos-arm64.zip)。
 2. 在 Mac 上完整解压，将 `PaperVault.app` 拖入“应用程序”文件夹。
 3. 打开 PaperVault，导入 PDF 开始阅读。论文库保存在 `~/Library/Application Support/PaperVault`。
 
