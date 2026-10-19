@@ -77,7 +77,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .library-sidebar { position: fixed; top: var(--header-h); bottom: 0; left: 0; width: 232px; padding: 29px 18px 32px; background: #fbfbfd; border-right: 1px solid var(--line); overflow-y: auto; }
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 12px 14px; color: var(--ink); font-size: 13px; font-weight: 650; }
 .count-badge { min-width: 24px; padding: 2px 7px; border-radius: 6px; text-align: center; background: #eeedf4; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.filter-item { width: 100%; min-height: 39px; display: grid; grid-template-columns: 16px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 7px 12px; margin: 2px 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #666272; text-align: left; cursor: pointer; font-size: 13px; }
+.filter-item { width: 100%; min-height: 39px; display: grid; grid-template-columns: 16px minmax(0,1fr) auto 18px; align-items: center; gap: 10px; padding: 7px 12px; margin: 2px 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #666272; text-align: left; cursor: pointer; font-size: 13px; }
 .filter-item:hover { background: #f0eff6; }
 .filter-item.active { background: var(--accent-soft); border-color: transparent; color: var(--accent-dark); box-shadow: none; font-weight: 650; }
 .filter-item:disabled { opacity: .52; cursor: not-allowed; }
