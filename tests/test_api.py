@@ -370,6 +370,39 @@ class ApiTestCase(unittest.TestCase):
         status, search_data, _ = self.request("GET", "/api/papers?q=Vision")
         self.assertEqual(status, 200)
         self.assertEqual(search_data["total"], 1)
+        self.assertEqual(search_data["papers"][0]["search_match"]["field"], "tag")
+
+        status, quoted_search_data, _ = self.request("GET", "/api/papers?q=%E2%80%9CVision%E2%80%9C")
+        self.assertEqual(status, 200)
+        self.assertEqual(quoted_search_data["total"], 1)
+
+        ranked_ids = []
+        for title, authors, blocks in (
+            ("Signal Title Match", "Someone Else", []),
+            ("Another Paper", "Signal Author", []),
+            ("A Third Paper", "Someone Else", [{"text_en": "The signal appears in this abstract."}]),
+        ):
+            ranked_id = str(uuid.uuid4())
+            ranked_ids.append(ranked_id)
+            self.server.db.insert_paper({
+                "id": ranked_id,
+                "title": title,
+                "authors": authors,
+                "summary_blocks": blocks,
+                "original_filename": f"{ranked_id}.pdf",
+                "stored_filename": f"{ranked_id}.pdf",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }, [])
+        try:
+            status, ranked_search, _ = self.request("GET", "/api/papers?q=signal&page_size=20")
+            self.assertEqual(status, 200)
+            ranked = [paper for paper in ranked_search["papers"] if paper["id"] in ranked_ids]
+            self.assertEqual([paper["id"] for paper in ranked], ranked_ids)
+            self.assertEqual([paper["search_match"]["field"] for paper in ranked], ["title", "authors", "summary"])
+        finally:
+            for ranked_id in ranked_ids:
+                self.server.db.delete_paper(ranked_id)
 
         self.server.db.update_paper(
             paper_id,

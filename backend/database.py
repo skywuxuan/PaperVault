@@ -14,6 +14,13 @@ from .config import apply_environment_settings
 
 SCHEMA_VERSION = 7
 
+SEARCH_EDGE_QUOTES = "\"'“”‘’「」『』"
+
+
+def normalize_library_query(value: str | None) -> str:
+    """Normalize search input without changing the query's meaningful text."""
+    return str(value or "").strip().strip(SEARCH_EDGE_QUOTES).strip()
+
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -577,6 +584,8 @@ class Database:
     ) -> list[dict[str, Any]]:
         clauses: list[str] = ["p.deleted_at IS NULL"]
         params: list[Any] = []
+        order_params: list[Any] = []
+        query = normalize_library_query(query)
         if query:
             term = f"%{query.strip()}%"
             clauses.append(
@@ -619,6 +628,24 @@ class Database:
             "title_asc": "p.title COLLATE NOCASE ASC",
             "title_desc": "p.title COLLATE NOCASE DESC",
         }.get(sort, "p.created_at DESC")
+        if query:
+            search_term = f"%{query}%"
+            order_by = f"""
+                CASE
+                    WHEN LOWER(COALESCE(p.title, '')) LIKE LOWER(?) THEN 0
+                    WHEN LOWER(COALESCE(p.authors, '')) LIKE LOWER(?) THEN 1
+                    WHEN LOWER(COALESCE(p.summary_pairs, '') || ' ' || COALESCE(p.summary_blocks, '')) LIKE LOWER(?) THEN 2
+                    WHEN LOWER(COALESCE(p.doi, '')) LIKE LOWER(?) THEN 3
+                    WHEN EXISTS (
+                        SELECT 1 FROM paper_tags rpt
+                        JOIN tags rt ON rt.id = rpt.tag_id
+                        WHERE rpt.paper_id = p.id AND LOWER(rt.name) LIKE LOWER(?)
+                    ) THEN 4
+                    ELSE 5
+                END ASC,
+                {order_by}
+            """
+            order_params = [search_term] * 5
         pagination = ""
         pagination_params: list[Any] = []
         if page_size is not None:
@@ -635,9 +662,14 @@ class Database:
                 ORDER BY {order_by}
                 {pagination}
                 """,
-                [*params, *pagination_params],
+                [*params, *order_params, *pagination_params],
             ).fetchall()
-            papers = [self._paper_dict(connection, row, include_variants=False) for row in rows]
+            papers = []
+            for row in rows:
+                paper = self._paper_dict(connection, row, include_variants=False)
+                if query:
+                    paper["search_match"] = self._search_match(row, paper["tags"], query)
+                papers.append(paper)
         return papers
 
     def count_papers(
@@ -836,6 +868,75 @@ class Database:
             if cursor.rowcount == 0:
                 return None
         return self.get_paper(paper_id)
+
+    @staticmethod
+    def _search_excerpt(value: str, query: str, limit: int = 260) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if not text:
+            return ""
+        position = text.casefold().find(query.casefold())
+        if position < 0:
+            return text[:limit].rstrip() + ("…" if len(text) > limit else "")
+        boundaries = ".!?。！？；;"
+        start = max((text.rfind(mark, 0, position) for mark in boundaries), default=-1) + 1
+        end_candidates = [text.find(mark, position + len(query)) for mark in boundaries]
+        end_candidates = [index for index in end_candidates if index >= 0]
+        end = min(end_candidates, default=len(text)) + 1
+        excerpt = text[start:end].strip()
+        if len(excerpt) <= limit:
+            return excerpt
+        window_start = max(0, position - max(0, limit // 3))
+        window_end = min(len(text), window_start + limit)
+        return ("…" if window_start else "") + text[window_start:window_end].strip() + ("…" if window_end < len(text) else "")
+
+    @staticmethod
+    def _summary_texts(raw_value: Any) -> list[str]:
+        try:
+            value = json.loads(raw_value or "[]") if isinstance(raw_value, str) else raw_value
+        except (TypeError, json.JSONDecodeError):
+            return []
+        texts: list[str] = []
+        text_keys = {"text", "text_en", "text_zh", "english", "chinese", "content_markdown"}
+
+        def visit(item: Any) -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    if key in text_keys and isinstance(child, str) and child.strip():
+                        texts.append(child)
+                    elif isinstance(child, (dict, list)):
+                        visit(child)
+            elif isinstance(item, list):
+                for child in item:
+                    visit(child)
+
+        visit(value)
+        return texts
+
+    @classmethod
+    def _search_match(cls, row: sqlite3.Row, tags: list[dict[str, Any]], query: str) -> dict[str, str]:
+        needle = query.casefold()
+        title = str(row["title"] or "")
+        if needle in title.casefold():
+            return {"field": "title", "label": "标题", "text": title}
+        authors = str(row["authors"] or "")
+        if needle in authors.casefold():
+            return {"field": "authors", "label": "作者", "text": authors}
+        for raw_value in (row["summary_pairs"], row["summary_blocks"]):
+            for summary_text in cls._summary_texts(raw_value):
+                if needle in summary_text.casefold():
+                    return {
+                        "field": "summary",
+                        "label": "摘要",
+                        "text": cls._search_excerpt(summary_text, query),
+                    }
+        doi = str(row["doi"] or "")
+        if needle in doi.casefold():
+            return {"field": "doi", "label": "DOI", "text": doi}
+        for tag in tags:
+            tag_name = str(tag.get("name") or "")
+            if needle in tag_name.casefold():
+                return {"field": "tag", "label": "标签", "text": tag_name}
+        return {"field": "summary", "label": "摘要", "text": ""}
 
     def replace_paper_chunks(self, paper_id: str, chunks: list[dict[str, Any]]) -> None:
         now = utc_now()

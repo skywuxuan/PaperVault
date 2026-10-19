@@ -77,6 +77,11 @@ test('a delayed library response cannot replace newer search results', async () 
   assert.equal(run('state.papers[0].id'), 'new');
 });
 
+test('library search trims surrounding quotation marks', () => {
+  const { run } = app();
+  assert.equal(run('normalizeLibraryQuery("“conformer“")'), 'conformer');
+});
+
 test('returning from a paper restores the previous library scroll position', async () => {
   const { context, run } = app();
   const scrollCalls = [];

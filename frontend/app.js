@@ -374,10 +374,43 @@ function jobStatusLabel(job) {
   return `${type} · ${status}`;
 }
 
-function tagChip(tag) {
-  const chip = make("span", "tag-chip", tag.name);
+function tagChip(tag, query = "") {
+  const chip = make("span", "tag-chip");
+  appendHighlightedText(chip, tag.name, query);
   chip.style.setProperty("--chip-color", tag.color);
   return chip;
+}
+
+function normalizeLibraryQuery(value) {
+  return String(value ?? "").trim().replace(/^[\s"'“”‘’「」『』]+|[\s"'“”‘’「」『』]+$/g, "").trim();
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function appendHighlightedText(target, value, query) {
+  const text = String(value ?? "");
+  const term = normalizeLibraryQuery(query);
+  if (!text || !term) {
+    target.append(document.createTextNode(text));
+    return;
+  }
+  const matcher = new RegExp(escapeRegExp(term), "giu");
+  let cursor = 0;
+  let matched = false;
+  let match;
+  while ((match = matcher.exec(text))) {
+    matched = true;
+    if (match.index > cursor) target.append(document.createTextNode(text.slice(cursor, match.index)));
+    target.append(make("mark", "search-hit", match[0]));
+    cursor = match.index + match[0].length;
+  }
+  if (!matched) {
+    target.append(document.createTextNode(text));
+    return;
+  }
+  if (cursor < text.length) target.append(document.createTextNode(text.slice(cursor)));
 }
 
 async function loadLibrary() {
@@ -467,6 +500,8 @@ function speakWordPopoverTerm() {
 function renderLibrary() {
   const sortHint = $("#publicationSortHint");
   if (sortHint) sortHint.hidden = !["publication", "publication_asc", "publication_desc"].includes(state.librarySort);
+  const searchSortHint = $("#searchSortHint");
+  if (searchSortHint) searchSortHint.hidden = !state.query;
   const list = $("#paperList");
   list.replaceChildren();
   const total = Number(state.libraryFacets.total) || 0;
@@ -528,11 +563,15 @@ function renderLibrary() {
       event.stopPropagation();
       setPaperReadState(paper.id, paper.read_state === "read" ? "unread" : "read").catch(handleError);
     });
-    titleLine.append(make("span", "paper-type-mark", "PDF"), make("h2", "paper-title", paper.title), readButton);
+    const title = make("h2", "paper-title");
+    appendHighlightedText(title, paper.title, state.query);
+    titleLine.append(make("span", "paper-type-mark", "PDF"), title, readButton);
     // Keep the metadata row compact: the author list and the expandable abstract
     // control share one line, while the full abstract remains available on demand.
     const metaLine = make("div", "paper-meta-line");
-    metaLine.append(make("p", "paper-authors", paperAuthorDetails(paper)));
+    const authors = make("p", "paper-authors");
+    appendHighlightedText(authors, paperAuthorDetails(paper), state.query);
+    metaLine.append(authors);
     const detailsSummary = make("button", "paper-details-toggle", "摘要预览");
     detailsSummary.type = "button";
     detailsSummary.setAttribute("aria-expanded", "false");
@@ -545,8 +584,15 @@ function renderLibrary() {
       detailsSummary.setAttribute("aria-expanded", String(!snippet.hidden));
     });
     const classification = make("span", "paper-tags paper-classification");
-    paper.tags.forEach((tag) => classification.append(tagChip(tag)));
+    paper.tags.forEach((tag) => classification.append(tagChip(tag, state.query)));
     metaLine.append(detailsSummary, snippet);
+    const searchMatch = paper.search_match;
+    if (searchMatch?.field === "summary" && searchMatch.text) {
+      const searchPreview = make("p", "paper-search-match");
+      searchPreview.append(make("span", "paper-search-match-label", `${searchMatch.label || "摘要"}命中`));
+      appendHighlightedText(searchPreview, searchMatch.text, state.query);
+      metaLine.append(searchPreview);
+    }
     content.append(titleLine, metaLine);
     if (paper.tags.length) content.append(classification);
 
@@ -4617,7 +4663,7 @@ function bindEvents() {
   $("#searchInput").addEventListener("input", (event) => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
-      state.query = event.target.value.trim();
+      state.query = normalizeLibraryQuery(event.target.value);
       state.libraryPage = 1;
       clearPaperSelection(false);
       loadLibrary().catch(handleError);
